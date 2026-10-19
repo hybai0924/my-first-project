@@ -1,0 +1,3106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>雨夜日式便利店街角微缩景观 - 3D Cel-Shaded Diorama</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #080d1a;
+      touch-action: none;
+    }
+    #diorama-canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      cursor: grab;
+    }
+    #diorama-canvas:active {
+      cursor: grabbing;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+  <canvas id="diorama-canvas"></canvas>
+  <script>
+    (function () {
+      'use strict';
+
+      // =========================================================================
+      // 1. SCENE, CAMERA, RENDERER & ORBIT CONTROLS (ZERO UI, PURE 3D DIORAMA)
+      // =========================================================================
+      const canvas = document.getElementById('diorama-canvas');
+      const renderer = new THREE.WebGLRenderer({
+        canvas: canvas,
+        antialias: true,
+        powerPreference: 'high-performance'
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.12;
+      if (renderer.outputEncoding !== undefined) {
+        renderer.outputEncoding = THREE.sRGBEncoding;
+      }
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x090f1d);
+      scene.fog = new THREE.FogExp2(0x0c1528, 0.0105);
+
+      const camera = new THREE.PerspectiveCamera(
+        37,
+        window.innerWidth / window.innerHeight,
+        0.5,
+        200
+      );
+      camera.position.set(22.8, 15.8, 24.8);
+
+      // OrbitControls with built-in smooth fallback controller
+      let controls = null;
+      if (typeof THREE.OrbitControls === 'function') {
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(-0.4, 2.2, -0.6);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.055;
+        controls.rotateSpeed = 0.78;
+        controls.zoomSpeed = 0.95;
+        controls.panSpeed = 0.75;
+        controls.minDistance = 7.5;
+        controls.maxDistance = 55.0;
+        controls.maxPolarAngle = Math.PI * 0.488;
+        controls.minPolarAngle = 0.06;
+        controls.update();
+      } else {
+        const spherical = { radius: 34.5, phi: 1.12, theta: 0.75 };
+        const targetSpherical = { radius: 34.5, phi: 1.12, theta: 0.75 };
+        const target = new THREE.Vector3(-0.4, 2.2, -0.6);
+        const targetDest = new THREE.Vector3(-0.4, 2.2, -0.6);
+        let isDragging = false;
+        let dragMode = 'rotate';
+        let prevX = 0, prevY = 0;
+
+        const syncCamera = function () {
+          spherical.radius += (targetSpherical.radius - spherical.radius) * 0.1;
+          spherical.phi += (targetSpherical.phi - spherical.phi) * 0.1;
+          spherical.theta += (targetSpherical.theta - spherical.theta) * 0.1;
+          target.lerp(targetDest, 0.1);
+          const sinPhi = Math.sin(spherical.phi);
+          camera.position.set(
+            target.x + spherical.radius * sinPhi * Math.sin(spherical.theta),
+            target.y + spherical.radius * Math.cos(spherical.phi),
+            target.z + spherical.radius * sinPhi * Math.cos(spherical.theta)
+          );
+          camera.lookAt(target);
+        };
+
+        canvas.addEventListener('pointerdown', function (e) {
+          isDragging = true;
+          dragMode = (e.button === 2 || e.shiftKey) ? 'pan' : 'rotate';
+          prevX = e.clientX;
+          prevY = e.clientY;
+        });
+        window.addEventListener('pointermove', function (e) {
+          if (!isDragging) return;
+          const dx = e.clientX - prevX;
+          const dy = e.clientY - prevY;
+          prevX = e.clientX;
+          prevY = e.clientY;
+          if (dragMode === 'rotate') {
+            targetSpherical.theta -= dx * 0.0065;
+            targetSpherical.phi = Math.max(0.08, Math.min(Math.PI * 0.488, targetSpherical.phi - dy * 0.0055));
+          } else {
+            const panScale = targetSpherical.radius * 0.0012;
+            targetDest.x -= dx * panScale * Math.cos(targetSpherical.theta);
+            targetDest.z += dx * panScale * Math.sin(targetSpherical.theta);
+            targetDest.y += dy * panScale;
+          }
+        });
+        window.addEventListener('pointerup', function () { isDragging = false; });
+        canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+        canvas.addEventListener('wheel', function (e) {
+          e.preventDefault();
+          targetSpherical.radius = Math.max(7.5, Math.min(55.0, targetSpherical.radius + e.deltaY * 0.02));
+        }, { passive: false });
+        controls = { update: syncCamera, target: target };
+      }
+
+      // =========================================================================
+      // 2. ANIME NIGHT SKY DOME SHADER & CEL-SHADING (三渲二) ENGINE
+      // =========================================================================
+      // Atmospheric anime night sky dome with soft horizon glow
+      const skyDomeGeo = new THREE.SphereGeometry(95, 32, 24);
+      const skyDomeMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        uniforms: {
+          uTime: { value: 0.0 }
+        },
+        vertexShader: [
+          'varying vec3 vWorldPos;',
+          'void main() {',
+          '  vec4 wp = modelMatrix * vec4(position, 1.0);',
+          '  vWorldPos = wp.xyz;',
+          '  gl_Position = projectionMatrix * viewMatrix * wp;',
+          '}'
+        ].join('\n'),
+        fragmentShader: [
+          'varying vec3 vWorldPos;',
+          'uniform float uTime;',
+          'void main() {',
+          '  float h = normalize(vWorldPos).y;',
+          '  vec3 zenith = vec3(0.035, 0.055, 0.115);',
+          '  vec3 midSky = vec3(0.065, 0.105, 0.21);',
+          '  vec3 horizon = vec3(0.11, 0.17, 0.30);',
+          '  vec3 col = mix(horizon, midSky, smoothstep(-0.05, 0.28, h));',
+          '  col = mix(col, zenith, smoothstep(0.28, 0.85, h));',
+          '  gl_FragColor = vec4(col, 1.0);',
+          '}'
+        ].join('\n')
+      });
+      scene.add(new THREE.Mesh(skyDomeGeo, skyDomeMat));
+
+      function createToonGradientTexture(steps) {
+        const data = new Uint8Array(steps.length * 4);
+        for (let i = 0; i < steps.length; i++) {
+          const val = steps[i];
+          data[i * 4] = val;
+          data[i * 4 + 1] = val;
+          data[i * 4 + 2] = val;
+          data[i * 4 + 3] = 255;
+        }
+        const tex = new THREE.DataTexture(data, steps.length, 1, THREE.RGBAFormat);
+        tex.minFilter = THREE.NearestFilter;
+        tex.magFilter = THREE.NearestFilter;
+        tex.generateMipmaps = false;
+        tex.needsUpdate = true;
+        return tex;
+      }
+
+      // Stepped anime cel-shading ramps
+      const toonRamp3 = createToonGradientTexture([92, 172, 255]);
+      const toonRamp4 = createToonGradientTexture([74, 136, 202, 255]);
+      const toonRampSoft = createToonGradientTexture([102, 152, 198, 234, 255]);
+
+      // Shared anime ink-line materials (三渲二清晰轮廓线)
+      const exteriorOutlineMat = new THREE.LineBasicMaterial({
+        color: 0x0e1525,
+        transparent: true,
+        opacity: 0.76
+      });
+      const interiorOutlineMat = new THREE.LineBasicMaterial({
+        color: 0x3b2618,
+        transparent: true,
+        opacity: 0.54
+      });
+      const subtleOutlineMat = new THREE.LineBasicMaterial({
+        color: 0x182338,
+        transparent: true,
+        opacity: 0.44
+      });
+      const hullOutlineMat = new THREE.MeshBasicMaterial({
+        color: 0x0b101d,
+        side: THREE.BackSide
+      });
+
+      const matCache = {};
+      function getToonMat(hexColor, opts) {
+        opts = opts || {};
+        const key = hexColor + '_' + JSON.stringify(opts);
+        if (matCache[key]) return matCache[key];
+        const mat = new THREE.MeshToonMaterial({
+          color: hexColor,
+          gradientMap: opts.soft ? toonRampSoft : (opts.four ? toonRamp4 : toonRamp3),
+          transparent: !!opts.transparent,
+          opacity: opts.opacity !== undefined ? opts.opacity : 1.0,
+          emissive: opts.emissive !== undefined ? opts.emissive : 0x000000,
+          emissiveIntensity: opts.emissiveIntensity !== undefined ? opts.emissiveIntensity : 0.0,
+          side: opts.side || THREE.FrontSide
+        });
+        matCache[key] = mat;
+        return mat;
+      }
+
+      function getStandardMat(hexColor, opts) {
+        opts = opts || {};
+        return new THREE.MeshStandardMaterial({
+          color: hexColor,
+          roughness: opts.roughness !== undefined ? opts.roughness : 0.4,
+          metalness: opts.metalness !== undefined ? opts.metalness : 0.1,
+          transparent: !!opts.transparent,
+          opacity: opts.opacity !== undefined ? opts.opacity : 1.0,
+          emissive: opts.emissive !== undefined ? opts.emissive : 0x000000,
+          emissiveIntensity: opts.emissiveIntensity !== undefined ? opts.emissiveIntensity : 0.0,
+          side: opts.side || THREE.FrontSide
+        });
+      }
+
+      function createAnimeMesh(geo, mat, opts) {
+        opts = opts || {};
+        const mesh = new THREE.Mesh(geo, mat);
+        if (opts.castShadow !== false) mesh.castShadow = true;
+        if (opts.receiveShadow !== false) mesh.receiveShadow = true;
+
+        if (opts.outline !== false) {
+          const threshold = opts.thresholdAngle || 24;
+          const edgesGeo = new THREE.EdgesGeometry(geo, threshold);
+          const lineMat = opts.interior ? interiorOutlineMat : (opts.subtle ? subtleOutlineMat : exteriorOutlineMat);
+          const lines = new THREE.LineSegments(edgesGeo, lineMat);
+          mesh.add(lines);
+        }
+
+        if (opts.hullScale) {
+          const hull = new THREE.Mesh(geo, hullOutlineMat);
+          hull.scale.setScalar(opts.hullScale);
+          mesh.add(hull);
+        }
+
+        if (opts.pos) mesh.position.set(opts.pos[0], opts.pos[1], opts.pos[2]);
+        if (opts.rot) mesh.rotation.set(opts.rot[0], opts.rot[1], opts.rot[2]);
+        if (opts.scale) mesh.scale.set(opts.scale[0], opts.scale[1], opts.scale[2]);
+        if (opts.parent) opts.parent.add(mesh);
+        return mesh;
+      }
+
+      const dioramaGroup = new THREE.Group();
+      scene.add(dioramaGroup);
+
+      // Mirrored reflection proxy group rendered under the wet asphalt & puddles
+      const reflectionGroup = new THREE.Group();
+      reflectionGroup.scale.y = -1;
+      reflectionGroup.position.y = 0.02;
+      dioramaGroup.add(reflectionGroup);
+
+      // =========================================================================
+      // 3. PROCEDURAL CANVAS2D ANIME TEXTURE GENERATORS
+      // =========================================================================
+      function makeCanvasTexture(width, height, drawFn) {
+        const c = document.createElement('canvas');
+        c.width = width;
+        c.height = height;
+        const ctx = c.getContext('2d');
+        drawFn(ctx, width, height);
+        const tex = new THREE.CanvasTexture(c);
+        if (tex.encoding !== undefined) tex.encoding = THREE.sRGBEncoding;
+        tex.needsUpdate = true;
+        return tex;
+      }
+
+      // 3.1 Konbini Main Signboard Texture (雨夜マート / AMAYO MART 24H)
+      const konbiniSignTex = makeCanvasTexture(1024, 256, function (ctx, w, h) {
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, '#fffef9');
+        grad.addColorStop(1, '#f4efe2');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+
+        // Classic Japanese Konbini vibrant stripes
+        ctx.fillStyle = '#00a7e1';
+        ctx.fillRect(0, 0, w, 34);
+        ctx.fillStyle = '#ff6b1a';
+        ctx.fillRect(0, 34, w, 18);
+
+        ctx.fillStyle = '#009b4d';
+        ctx.fillRect(0, h - 44, w, 44);
+        ctx.fillStyle = '#ffba08';
+        ctx.fillRect(0, h - 54, w, 10);
+
+        // Left 24H Emblem Badge
+        ctx.save();
+        ctx.fillStyle = '#ff5714';
+        ctx.beginPath();
+        ctx.arc(105, h * 0.5, 62, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.lineWidth = 6;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 44px "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('24H', 105, h * 0.44);
+        ctx.font = 'bold 20px sans-serif';
+        ctx.fillText('OPEN', 105, h * 0.67);
+        ctx.restore();
+
+        // Main Japanese Brand Typography
+        ctx.fillStyle = '#14243b';
+        ctx.font = '900 78px "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans CJK JP", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('雨夜マート', 195, h * 0.45);
+
+        ctx.fillStyle = '#007ea7';
+        ctx.font = '800 24px sans-serif';
+        ctx.fillText('AMAYO MART • HOSHIMIZAKA 2-CHOME', 202, h * 0.72);
+
+        const pills = [
+          { text: '酒・たばこ', bg: '#e63946', x: 645 },
+          { text: '銀行ATM', bg: '#009b4d', x: 785 },
+          { text: '淹れたて珈琲', bg: '#6f4e37', x: 915 }
+        ];
+        pills.forEach(function (p) {
+          ctx.fillStyle = p.bg;
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(p.x - 58, 72, 116, 104, 14) : ctx.rect(p.x - 58, 72, 116, 104);
+          ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 22px sans-serif';
+          ctx.textAlign = 'center';
+          const parts = p.text.split('・');
+          if (parts.length > 1) {
+            ctx.fillText(parts[0], p.x, 108);
+            ctx.fillText(parts[1], p.x, 144);
+          } else {
+            ctx.fillText(p.text.slice(0, 4), p.x, 108);
+            ctx.fillText(p.text.slice(4), p.x, 144);
+          }
+        });
+      });
+
+      // 3.2 Freestanding Street Corner Pylon Sign Texture (立柱灯箱)
+      const pylonSignTex = makeCanvasTexture(256, 512, function (ctx, w, h) {
+        ctx.fillStyle = '#fffcf2';
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.fillStyle = '#00a7e1';
+        ctx.fillRect(0, 0, 22, h);
+        ctx.fillStyle = '#009b4d';
+        ctx.fillRect(w - 22, 0, 22, h);
+
+        ctx.fillStyle = '#ff6b1a';
+        ctx.beginPath();
+        ctx.arc(w / 2, 78, 52, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 38px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('24H', w / 2, 78);
+
+        const chars = ['雨', '夜', 'マ', 'ー', 'ト'];
+        ctx.fillStyle = '#14243b';
+        ctx.font = '900 44px sans-serif';
+        chars.forEach(function (ch, idx) {
+          ctx.fillText(ch, w / 2, 168 + idx * 48);
+        });
+
+        ctx.fillStyle = '#e63946';
+        ctx.fillRect(32, 395, w - 64, 44);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.fillText('酒 • たばこ • ATM', w / 2, 418);
+
+        ctx.fillStyle = '#1d3557';
+        ctx.fillRect(32, 448, w - 64, 46);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 28px sans-serif';
+        ctx.fillText('P 駐車場あり', w / 2, 472);
+      });
+
+      // 3.3 Vending Machine Front Texture (Red & Blue Variants)
+      function makeVendingTex(themeColor, headerText) {
+        return makeCanvasTexture(256, 512, function (ctx, w, h) {
+          ctx.fillStyle = themeColor;
+          ctx.fillRect(0, 0, w, h);
+
+          ctx.fillStyle = '#f8f9fa';
+          ctx.fillRect(18, 22, w - 36, 250);
+          ctx.fillStyle = '#e9ecef';
+          ctx.fillRect(24, 28, w - 48, 238);
+
+          const rowY = [95, 172, 248];
+          rowY.forEach(function (ry, rIdx) {
+            ctx.fillStyle = '#adb5bd';
+            ctx.fillRect(24, ry - 18, w - 48, 6);
+            ctx.fillStyle = (rIdx === 2) ? '#f76707' : '#1c7ed6';
+            ctx.fillRect(24, ry - 12, w - 48, 14);
+            for (let b = 0; b < 6; b++) {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(32 + b * 33, ry + 4, 24, 10);
+              ctx.fillStyle = (rIdx === 2) ? '#ff922b' : '#74c0fc';
+              ctx.fillRect(35 + b * 33, ry + 6, 18, 6);
+            }
+          });
+
+          ctx.fillStyle = '#212529';
+          ctx.fillRect(18, 284, w - 36, 76);
+
+          const pGrad = ctx.createLinearGradient(24, 290, 145, 354);
+          pGrad.addColorStop(0, '#4cc9f0');
+          pGrad.addColorStop(1, '#4361ee');
+          ctx.fillStyle = pGrad;
+          ctx.fillRect(26, 292, 122, 60);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '900 20px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(headerText, 87, 326);
+
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(160, 294, 68, 24);
+          ctx.fillStyle = '#ff4d4d';
+          ctx.font = 'bold 18px monospace';
+          ctx.fillText('130', 194, 312);
+
+          ctx.fillStyle = '#ced4da';
+          ctx.fillRect(168, 326, 52, 26);
+
+          ctx.fillStyle = '#16191d';
+          ctx.fillRect(28, 384, w - 56, 92);
+          ctx.fillStyle = '#343a40';
+          ctx.fillRect(36, 392, w - 72, 68);
+          ctx.fillStyle = '#868e96';
+          ctx.font = 'bold 14px sans-serif';
+          ctx.fillText('PUSH / とりだし口', w / 2, 428);
+        });
+      }
+      const vendingRedTex = makeVendingTex('#d92b2b', '24H DRINK');
+      const vendingBlueTex = makeVendingTex('#1d6ec9', 'ICE COFFEE');
+
+      // 3.4 Promotional Window Posters & Interior Category Lightboxes
+      function makePosterTex(bgTop, bgBot, title, sub, price) {
+        return makeCanvasTexture(256, 360, function (ctx, w, h) {
+          const g = ctx.createLinearGradient(0, 0, 0, h);
+          g.addColorStop(0, bgTop);
+          g.addColorStop(1, bgBot);
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, w, h);
+
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 8;
+          ctx.strokeRect(10, 10, w - 20, h - 20);
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '900 34px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(title, w / 2, 74);
+
+          ctx.fillStyle = 'rgba(255,255,255,0.92)';
+          ctx.beginPath();
+          ctx.arc(w / 2, 178, 68, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = bgBot;
+          ctx.font = 'bold 28px sans-serif';
+          ctx.fillText(sub, w / 2, 185);
+
+          ctx.fillStyle = '#ffe066';
+          ctx.font = '900 44px sans-serif';
+          ctx.fillText(price, w / 2, 305);
+        });
+      }
+      const posterCoffeeTex = makePosterTex('#3d2314', '#7f4f24', '挽きたて珈琲', 'HOT / ICE', '¥110');
+      const posterOdenTex = makePosterTex('#d9480f', '#f76707', 'あったかおでん', 'だし自慢', '¥100~');
+      const posterBentoTex = makePosterTex('#2b9348', '#55a630', '新発売 弁当', '特製おにぎり', '¥140~');
+      const posterSweetsTex = makePosterTex('#e05286', '#f08c00', '夜限定スイーツ', '極上プリン', '¥240');
+
+      // 3.5 Community Bulletin Board Collage Texture (小型公告栏)
+      const bulletinBoardTex = makeCanvasTexture(512, 320, function (ctx, w, h) {
+        ctx.fillStyle = '#8d6748';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#7a5638';
+        for (let i = 0; i < 40; i++) {
+          ctx.fillRect((i * 73) % w, (i * 47) % h, 18, 6);
+        }
+
+        ctx.fillStyle = '#f8f9fa';
+        ctx.fillRect(16, 12, w - 32, 36);
+        ctx.fillStyle = '#1d3557';
+        ctx.font = '900 22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('星見坂二丁目 町内会掲示板', w / 2, 37);
+
+        const flyers = [
+          { x: 24, y: 62, fw: 136, fh: 185, bg: '#fff3bf', title: '夏祭り花火', sub: '8月24日 開催', bar: '#e63946' },
+          { x: 174, y: 58, fw: 150, fh: 112, bg: '#e3fafc', title: '資源回収日', sub: '毎週水・土曜日', bar: '#0ca678' },
+          { x: 178, y: 182, fw: 146, fh: 118, bg: '#fff0f6', title: '迷い猫探してます', sub: '黒猫・赤い首輪', bar: '#f03e3e' },
+          { x: 338, y: 64, fw: 148, fh: 228, bg: '#f8f9fa', title: '防犯パトロール', sub: '夜間照明点灯中', bar: '#1c7ed6' }
+        ];
+        flyers.forEach(function (f) {
+          ctx.fillStyle = 'rgba(0,0,0,0.22)';
+          ctx.fillRect(f.x + 4, f.y + 4, f.fw, f.fh);
+          ctx.fillStyle = f.bg;
+          ctx.fillRect(f.x, f.y, f.fw, f.fh);
+          ctx.fillStyle = f.bar;
+          ctx.fillRect(f.x, f.y, f.fw, 26);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 15px sans-serif';
+          ctx.fillText(f.title, f.x + f.fw / 2, f.y + 18);
+          ctx.fillStyle = '#343a40';
+          ctx.font = 'bold 14px sans-serif';
+          ctx.fillText(f.sub, f.x + f.fw / 2, f.y + 56);
+          ctx.fillStyle = '#adb5bd';
+          for (let l = 0; l < 4; l++) {
+            ctx.fillRect(f.x + 14, f.y + 76 + l * 18, f.fw - 28, 6);
+          }
+        });
+      });
+
+      // 3.6 Interior Ceiling Aisle Sign Texture
+      function makeAisleSignTex(bgHex, textLeft, textRight) {
+        return makeCanvasTexture(512, 96, function (ctx, w, h) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.fillStyle = bgHex;
+          ctx.fillRect(0, 0, 140, h);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '900 30px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(textLeft, 70, h / 2);
+
+          ctx.fillStyle = '#1b263b';
+          ctx.font = 'bold 32px sans-serif';
+          ctx.fillText(textRight, 320, h / 2);
+        });
+      }
+      const aisleSign1Tex = makeAisleSignTex('#009b4d', '1 • 2', 'お弁当 • おにぎり • サンド');
+      const aisleSign2Tex = makeAisleSignTex('#ff6b1a', '3 • 4', 'お菓子 • カップ麺 • パン');
+      const aisleSign3Tex = makeAisleSignTex('#00a7e1', '5 • 6', 'ドリンク • お酒 • アイス');
+
+      // 3.7 Japanese Street Stop Sign, Road Sign & Izakaya Noren Textures
+      const stopSignTex = makeCanvasTexture(256, 256, function (ctx, w, h) {
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = '#e03131';
+        ctx.beginPath();
+        ctx.moveTo(16, 20);
+        ctx.lineTo(w - 16, 20);
+        ctx.lineTo(w / 2, h - 16);
+        ctx.closePath();
+        ctx.fill();
+        ctx.lineWidth = 10;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 44px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('止まれ', w / 2, 92);
+        ctx.font = 'bold 26px sans-serif';
+        ctx.fillText('STOP', w / 2, 142);
+      });
+
+      const streetNameSignTex = makeCanvasTexture(256, 96, function (ctx, w, h) {
+        ctx.fillStyle = '#1864ab';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 6;
+        ctx.strokeRect(6, 6, w - 12, h - 12);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 28px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('星見坂 二丁目', w / 2, 46);
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillText('Hoshimizaka 2-chome', w / 2, 74);
+      });
+
+      const izakayaNorenTex = makeCanvasTexture(256, 128, function (ctx, w, h) {
+        ctx.fillStyle = '#1d3557';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#f1faee';
+        ctx.lineWidth = 4;
+        for (let i = 1; i < 4; i++) {
+          ctx.beginPath();
+          ctx.moveTo((w / 4) * i, 0);
+          ctx.lineTo((w / 4) * i, h);
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const labels = ['酒', 'お', 'で', 'ん'];
+        labels.forEach(function (lb, idx) {
+          ctx.fillText(lb, (w / 8) + idx * (w / 4), h * 0.52);
+        });
+      });
+
+      // =========================================================================
+      // 4. LIGHTING SYSTEM (WARM KONBINI INTERIOR VS. COOL RAINY NIGHT EXTERIOR)
+      // =========================================================================
+      const hemiLight = new THREE.HemisphereLight(0x3a568c, 0x0f172a, 0.75);
+      scene.add(hemiLight);
+
+      const moonLight = new THREE.DirectionalLight(0x6e96db, 0.68);
+      moonLight.position.set(16, 27, 18);
+      moonLight.castShadow = true;
+      moonLight.shadow.mapSize.width = 2048;
+      moonLight.shadow.mapSize.height = 2048;
+      moonLight.shadow.camera.near = 4;
+      moonLight.shadow.camera.far = 68;
+      const d = 17.5;
+      moonLight.shadow.camera.left = -d;
+      moonLight.shadow.camera.right = d;
+      moonLight.shadow.camera.top = d;
+      moonLight.shadow.camera.bottom = -d;
+      moonLight.shadow.bias = -0.0005;
+      scene.add(moonLight);
+
+      // Warm golden-white convenience store interior lights
+      const storeMainLight1 = new THREE.PointLight(0xfff1cf, 2.05, 16.5, 1.45);
+      storeMainLight1.position.set(-2.2, 4.7, -3.0);
+      storeMainLight1.castShadow = true;
+      dioramaGroup.add(storeMainLight1);
+
+      const storeMainLight2 = new THREE.PointLight(0xffebb5, 1.85, 15.5, 1.45);
+      storeMainLight2.position.set(1.4, 4.7, -6.8);
+      dioramaGroup.add(storeMainLight2);
+
+      // Warm light spilling through the expansive glass windows & doors onto the wet street
+      const storeWindowSpillLight = new THREE.PointLight(0xffd27d, 1.5, 14.0, 1.55);
+      storeWindowSpillLight.position.set(-0.2, 2.6, 2.9);
+      dioramaGroup.add(storeWindowSpillLight);
+
+      const storeSideSpillLight = new THREE.PointLight(0xffd27d, 1.2, 12.0, 1.55);
+      storeSideSpillLight.position.set(5.4, 2.6, -4.0);
+      dioramaGroup.add(storeSideSpillLight);
+
+      // Vending machines neon cyan/red glow
+      const vendingGlowLight = new THREE.PointLight(0x6cd4ff, 1.15, 8.8, 1.75);
+      vendingGlowLight.position.set(-6.0, 2.2, 2.9);
+      dioramaGroup.add(vendingGlowLight);
+
+      // Street corner gooseneck lamp cool-white glow
+      const streetLampLight = new THREE.PointLight(0x9ec5ff, 1.4, 15.5, 1.5);
+      streetLampLight.position.set(4.2, 7.8, 3.8);
+      dioramaGroup.add(streetLampLight);
+
+      const leftStreetLampLight = new THREE.PointLight(0xffd699, 1.1, 12.5, 1.6);
+      leftStreetLampLight.position.set(-8.8, 6.2, 3.6);
+      dioramaGroup.add(leftStreetLampLight);
+
+      // Alleyway warm red izakaya lantern light
+      const alleyLanternLight = new THREE.PointLight(0xff4d2e, 1.25, 9.5, 1.65);
+      alleyLanternLight.position.set(-9.4, 2.8, -5.8);
+      dioramaGroup.add(alleyLanternLight);
+
+      // Distant Traffic Signal dynamic light (cycles Green -> Yellow -> Red)
+      const trafficSignalLight = new THREE.PointLight(0x2be884, 1.15, 12.5, 1.55);
+      trafficSignalLight.position.set(7.2, 5.8, -5.8);
+      dioramaGroup.add(trafficSignalLight);
+
+      // =========================================================================
+      // 5. COLLECTIBLE SQUARE DIORAMA BASE & WET STREET CORNER SYSTEM
+      // =========================================================================
+      const BASE_SIZE = 26.0;
+      const baseGroup = new THREE.Group();
+      dioramaGroup.add(baseGroup);
+
+      // 5.1 Multi-tiered Collectible Display Plinth (正方形收藏级微缩底座)
+      createAnimeMesh(
+        new THREE.BoxGeometry(BASE_SIZE + 1.4, 0.55, BASE_SIZE + 1.4),
+        getToonMat(0x141824, { four: true }),
+        { pos: [0, -1.35, 0], parent: baseGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(BASE_SIZE + 0.9, 0.14, BASE_SIZE + 0.9),
+        getStandardMat(0xc99e52, { roughness: 0.25, metalness: 0.82 }),
+        { pos: [0, -1.0, 0], parent: baseGroup, outline: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(BASE_SIZE + 0.4, 0.92, BASE_SIZE + 0.4),
+        getToonMat(0x1c2334, { four: true }),
+        { pos: [0, -0.47, 0], parent: baseGroup }
+      );
+
+      // 5.2 Wet Dark Asphalt Road Base (积水反光沥青路面)
+      const roadAsphaltMat = new THREE.MeshStandardMaterial({
+        color: 0x161d2d,
+        roughness: 0.16,
+        metalness: 0.38,
+        transparent: true,
+        opacity: 0.83
+      });
+      const roadMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(BASE_SIZE, 0.12, BASE_SIZE),
+        roadAsphaltMat
+      );
+      roadMesh.position.set(0, -0.05, 0);
+      roadMesh.receiveShadow = true;
+      baseGroup.add(roadMesh);
+
+      // 5.3 L-Shaped Raised Sidewalk Platform (街角转折人行道)
+      const swWidth = 17.8;
+      const swDepth = 16.6;
+      const swCenterX = -13.0 + swWidth / 2;
+      const swCenterZ = -13.0 + swDepth / 2;
+
+      const sidewalkTex = makeCanvasTexture(512, 512, function (ctx, w, h) {
+        ctx.fillStyle = '#485266';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#333c4d';
+        ctx.lineWidth = 2;
+        const step = 32;
+        for (let x = 0; x <= w; x += step) {
+          ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+        }
+        for (let y = 0; y <= h; y += step) {
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(18, 25, 42, 0.28)';
+        ctx.beginPath(); ctx.arc(360, 410, 85, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(180, 390, 65, 0, Math.PI * 2); ctx.fill();
+      });
+
+      const sidewalkMat = new THREE.MeshToonMaterial({
+        map: sidewalkTex,
+        gradientMap: toonRampSoft
+      });
+      createAnimeMesh(
+        new THREE.BoxGeometry(swWidth, 0.24, swDepth),
+        sidewalkMat,
+        { pos: [swCenterX, 0.12, swCenterZ], parent: baseGroup }
+      );
+
+      // Opposite sidewalk corner across the intersection (+X, +Z)
+      createAnimeMesh(
+        new THREE.BoxGeometry(4.2, 0.24, 4.2),
+        sidewalkMat,
+        { pos: [10.9, 0.12, 10.9], parent: baseGroup }
+      );
+
+      // 5.4 Curb Stones & Japanese Tactile Paving (路缘石与盲道砖)
+      const curbMat = getToonMat(0x636e82, { four: true });
+      for (let i = 0; i < 12; i++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(1.44, 0.26, 0.18),
+          curbMat,
+          { pos: [-12.2 + i * 1.48, 0.13, 3.65], parent: baseGroup }
+        );
+      }
+      for (let i = 0; i < 11; i++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.18, 0.26, 1.44),
+          curbMat,
+          { pos: [4.85, 0.13, -12.2 + i * 1.48], parent: baseGroup }
+        );
+      }
+
+      // Yellow Tactile Braille Blocks (点字ブロック)
+      const tactileMat = getToonMat(0xeab308, { four: true });
+      for (let i = 0; i < 7; i++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.42, 0.025, 0.42),
+          tactileMat,
+          { pos: [1.5 + i * 0.46, 0.25, 3.25], parent: baseGroup, subtle: true }
+        );
+      }
+      for (let i = 0; i < 7; i++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.42, 0.025, 0.42),
+          tactileMat,
+          { pos: [4.45, 0.25, -0.2 + i * 0.46], parent: baseGroup, subtle: true }
+        );
+      }
+
+      // 5.5 Roadside Drainage Gutter, Storm Drain Grates & Cast-Iron Manhole Cover
+      // (排水沟、金属雨水篦子与日式铸铁井盖)
+      const gutterMat = getStandardMat(0x1f2738, { roughness: 0.2, metalness: 0.3 });
+      createAnimeMesh(
+        new THREE.BoxGeometry(17.8, 0.02, 0.45),
+        gutterMat,
+        { pos: [-4.1, 0.015, 3.96], parent: baseGroup, outline: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.45, 0.02, 16.6),
+        gutterMat,
+        { pos: [5.16, 0.015, -4.7], parent: baseGroup, outline: false }
+      );
+
+      function addDrainGrate(x, z, rotY) {
+        const grateGroup = new THREE.Group();
+        grateGroup.position.set(x, 0.025, z);
+        grateGroup.rotation.y = rotY || 0;
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.95, 0.03, 0.38),
+          getStandardMat(0x2b3445, { metalness: 0.7, roughness: 0.25 }),
+          { parent: grateGroup, subtle: true }
+        );
+        for (let s = -4; s <= 4; s++) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.04, 0.035, 0.32),
+            getStandardMat(0x121620, { metalness: 0.8, roughness: 0.2 }),
+            { pos: [s * 0.095, 0.005, 0], parent: grateGroup, outline: false }
+          );
+        }
+        baseGroup.add(grateGroup);
+      }
+      addDrainGrate(-6.2, 3.96, 0);
+      addDrainGrate(-0.5, 3.96, 0);
+      addDrainGrate(3.8, 3.96, 0);
+      addDrainGrate(5.16, 1.2, Math.PI / 2);
+      addDrainGrate(5.16, -4.8, Math.PI / 2);
+      addDrainGrate(5.16, -10.2, Math.PI / 2);
+
+      // Detailed Japanese Cast-Iron Manhole Cover (マンホール蓋) in intersection
+      const manholeGroup = new THREE.Group();
+      manholeGroup.position.set(6.8, 0.022, 6.2);
+      baseGroup.add(manholeGroup);
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.62, 0.62, 0.02, 24),
+        getStandardMat(0x27303f, { metalness: 0.75, roughness: 0.28 }),
+        { parent: manholeGroup, subtle: true }
+      );
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.46, 0.46, 0.024, 20),
+        getStandardMat(0x1e2633, { metalness: 0.8, roughness: 0.22 }),
+        { parent: manholeGroup, outline: false }
+      );
+
+      // 5.6 Reflective Zebra Crosswalk Stripes & Road Markings (反光斑马线与道路标线)
+      const stripeMat = getStandardMat(0xe2e8f0, {
+        roughness: 0.15,
+        metalness: 0.28,
+        emissive: 0x334155,
+        emissiveIntensity: 0.26
+      });
+      for (let i = 0; i < 6; i++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.55, 0.02, 2.3),
+          stripeMat,
+          { pos: [6.1 + i * 0.98, 0.015, 2.2], parent: baseGroup, outline: false }
+        );
+      }
+      for (let i = 0; i < 6; i++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(2.3, 0.02, 0.55),
+          stripeMat,
+          { pos: [2.6, 0.015, 5.2 + i * 0.98], parent: baseGroup, outline: false }
+        );
+      }
+      // Stop lines (停止線) & Japanese diamond road approach symbol (◇)
+      createAnimeMesh(
+        new THREE.BoxGeometry(6.2, 0.02, 0.28),
+        stripeMat,
+        { pos: [8.6, 0.015, -0.2], parent: baseGroup, outline: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.28, 0.02, 6.2),
+        stripeMat,
+        { pos: [-0.2, 0.015, 8.2], parent: baseGroup, outline: false }
+      );
+      // Dashed yellow/orange road centerline on the main road
+      const centerLineMat = getStandardMat(0xf59e0b, { roughness: 0.2, emissive: 0xd97706, emissiveIntensity: 0.2 });
+      for (let cl = 0; cl < 3; cl++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.18, 0.018, 1.65),
+          centerLineMat,
+          { pos: [8.8, 0.015, -3.2 - cl * 2.8], parent: baseGroup, outline: false }
+        );
+      }
+
+      // 5.7 Convenience Store Parking Spaces & Wheel Stops (停车位与止轮块)
+      const parkLineMat = getStandardMat(0xcbd5e1, { roughness: 0.22, metalness: 0.2 });
+      [-11.4, -8.6, -5.8, -3.0].forEach(function (bx) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.14, 0.018, 4.6),
+          parkLineMat,
+          { pos: [bx, 0.014, 6.6], parent: baseGroup, outline: false }
+        );
+      });
+      createAnimeMesh(
+        new THREE.BoxGeometry(8.54, 0.018, 0.14),
+        parkLineMat,
+        { pos: [-7.2, 0.014, 4.35], parent: baseGroup, outline: false }
+      );
+
+      [-10.0, -7.2, -4.4].forEach(function (px) {
+        [-0.55, 0.55].forEach(function (dx) {
+          const stopBlock = createAnimeMesh(
+            new THREE.BoxGeometry(0.62, 0.13, 0.18),
+            getToonMat(0x94a3b8),
+            { pos: [px + dx, 0.07, 4.95], parent: baseGroup, subtle: true }
+          );
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.42, 0.06, 0.19),
+            getToonMat(0xfacc15, { emissive: 0xfacc15, emissiveIntensity: 0.25 }),
+            { pos: [0, 0.01, 0], parent: stopBlock, outline: false }
+          );
+        });
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.55, 0.016, 0.75),
+          getStandardMat(0x3b82f6, { roughness: 0.25, emissive: 0x1d4ed8, emissiveIntensity: 0.2 }),
+          { pos: [px, 0.013, 7.6], parent: baseGroup, outline: false }
+        );
+      });
+
+      // 5.8 Wet Puddles with Custom GLSL Ripple & Neon Shimmer Shader (积水路面与动态波纹着色器)
+      const puddleShaderMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        uniforms: {
+          uTime: { value: 0.0 },
+          uSignalColor: { value: new THREE.Color(0x22c55e) },
+          uDoorOpen: { value: 0.0 }
+        },
+        vertexShader: [
+          'varying vec2 vUv;',
+          'varying vec3 vWorldPos;',
+          'void main() {',
+          '  vUv = uv;',
+          '  vec4 wp = modelMatrix * vec4(position, 1.0);',
+          '  vWorldPos = wp.xyz;',
+          '  gl_Position = projectionMatrix * viewMatrix * wp;',
+          '}'
+        ].join('\n'),
+        fragmentShader: [
+          'varying vec2 vUv;',
+          'varying vec3 vWorldPos;',
+          'uniform float uTime;',
+          'uniform vec3 uSignalColor;',
+          'uniform float uDoorOpen;',
+          'void main() {',
+          '  vec2 p = vWorldPos.xz;',
+          '  float w1 = sin(length(p - vec2(-1.2, 5.8)) * 12.0 - uTime * 6.5);',
+          '  float w2 = sin(length(p - vec2(6.8, 5.5)) * 14.0 - uTime * 7.2 + 1.7);',
+          '  float w3 = sin(length(p - vec2(8.2, -3.8)) * 11.0 - uTime * 5.8 + 3.1);',
+          '  float ripple = (w1 + w2 + w3) * 0.04;',
+          '  vec3 baseCol = vec3(0.05, 0.09, 0.18);',
+          '  float storeGlow = exp(-length(p - vec2(-0.5, 4.2)) * 0.24) * (0.55 + uDoorOpen * 0.25);',
+          '  float vendGlow = exp(-length(p - vec2(-5.8, 3.8)) * 0.35) * 0.48;',
+          '  float sigGlow = exp(-length(p - vec2(7.6, -3.5)) * 0.28) * 0.52;',
+          '  vec3 col = baseCol + vec3(1.0, 0.82, 0.45) * (storeGlow + ripple)',
+          '           + vec3(0.25, 0.72, 1.0) * (vendGlow + ripple * 0.8)',
+          '           + uSignalColor * (sigGlow + ripple);',
+          '  float edge = smoothstep(0.5, 0.38, length(vUv - vec2(0.5)));',
+          '  gl_FragColor = vec4(col, edge * 0.58);',
+          '}'
+        ].join('\n')
+      });
+
+      const puddleDefs = [
+        { x: -1.2, z: 5.8, rx: 3.5, rz: 2.2, rot: 0.15 },
+        { x: -6.8, z: 6.4, rx: 2.9, rz: 1.8, rot: -0.2 },
+        { x: 6.8, z: 5.5, rx: 3.2, rz: 2.5, rot: 0.35 },
+        { x: 8.2, z: -3.8, rx: 2.6, rz: 3.6, rot: -0.1 },
+        { x: -0.5, z: 2.4, rx: 1.9, rz: 0.95, rot: 0.05, y: 0.246 },
+        { x: -9.8, z: -1.5, rx: 1.4, rz: 2.6, rot: 0.08, y: 0.246 }
+      ];
+
+      puddleDefs.forEach(function (p) {
+        const puddlePlane = new THREE.Mesh(
+          new THREE.PlaneGeometry(p.rx * 2.0, p.rz * 2.0),
+          puddleShaderMat
+        );
+        puddlePlane.rotation.x = -Math.PI / 2;
+        puddlePlane.rotation.z = p.rot;
+        puddlePlane.position.set(p.x, p.y !== undefined ? p.y : 0.022, p.z);
+        baseGroup.add(puddlePlane);
+      });
+
+      // =========================================================================
+      // 6. THE CONVENIENCE STORE BUILDING (日式街角便利店主体、二层阁楼水塔与天窗)
+      // =========================================================================
+      const storeGroup = new THREE.Group();
+      storeGroup.position.set(0, 0.24, 0);
+      dioramaGroup.add(storeGroup);
+
+      const wallCreamMat = getToonMat(0xf4efe6, { four: true });
+      const wallSlateMat = getToonMat(0x283347, { four: true });
+      const frameDarkMat = getToonMat(0x1c2536, { four: true });
+      const interiorWallMat = getToonMat(0xfff8eb, { soft: true });
+
+      // 6.1 Warm Tiled Store Interior Floor & Floor Guidance Decals (店内暖色地砖与地面导视)
+      const interiorFloorTex = makeCanvasTexture(512, 512, function (ctx, w, h) {
+        ctx.fillStyle = '#fff5dc';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#ead8b8';
+        ctx.lineWidth = 2;
+        for (let i = 0; i <= w; i += 32) {
+          ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke();
+        }
+        ctx.fillStyle = '#009b4d';
+        ctx.fillRect(85, 360, 145, 36);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('レジ入口 WAIT HERE', 157, 384);
+
+        [315, 270].forEach(function (fy) {
+          ctx.fillStyle = '#00a7e1';
+          ctx.fillRect(128, fy, 58, 24);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(136, fy + 4, 16, 16);
+          ctx.fillRect(162, fy + 4, 16, 16);
+        });
+      });
+
+      const storeFloor = new THREE.Mesh(
+        new THREE.BoxGeometry(10.8, 0.08, 12.4),
+        new THREE.MeshToonMaterial({
+          map: interiorFloorTex,
+          gradientMap: toonRampSoft,
+          emissive: 0xffe4b5,
+          emissiveIntensity: 0.25
+        })
+      );
+      storeFloor.position.set(-1.7, 0.04, -5.3);
+      storeFloor.receiveShadow = true;
+      storeGroup.add(storeFloor);
+
+      // 6.2 Back Wall (Z = -11.5) & Left Exterior/Interior Wall (X = -7.1)
+      createAnimeMesh(
+        new THREE.BoxGeometry(11.0, 5.2, 0.28),
+        wallCreamMat,
+        { pos: [-1.7, 2.6, -11.46], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(10.6, 4.9, 0.06),
+        interiorWallMat,
+        { pos: [-1.7, 2.5, -11.28], parent: storeGroup, interior: true }
+      );
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.28, 5.2, 12.6),
+        wallCreamMat,
+        { pos: [-7.06, 2.6, -5.3], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.06, 4.9, 12.2),
+        interiorWallMat,
+        { pos: [-6.88, 2.5, -5.3], parent: storeGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.32, 0.85, 12.64),
+        wallSlateMat,
+        { pos: [-7.08, 0.425, -5.3], parent: storeGroup }
+      );
+
+      // 6.3 Front & Right Storefront Pillars, Low Apron Walls & Mullions
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.8, 5.2, 0.28),
+        wallCreamMat,
+        { pos: [-5.8, 2.6, 0.86], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.84, 0.85, 0.32),
+        wallSlateMat,
+        { pos: [-5.8, 0.425, 0.88], parent: storeGroup }
+      );
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.36, 5.2, 0.36),
+        wallSlateMat,
+        { pos: [3.68, 2.6, 0.86], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.28, 5.2, 3.4),
+        wallCreamMat,
+        { pos: [3.68, 2.6, -9.9], parent: storeGroup }
+      );
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.9, 0.58, 0.26),
+        wallSlateMat,
+        { pos: [2.15, 0.29, 0.86], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.26, 0.58, 8.9),
+        wallSlateMat,
+        { pos: [3.68, 0.29, -3.75], parent: storeGroup }
+      );
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(8.2, 1.35, 0.3),
+        wallCreamMat,
+        { pos: [-0.3, 4.52, 0.86], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.3, 1.35, 9.2),
+        wallCreamMat,
+        { pos: [3.68, 4.52, -3.7], parent: storeGroup }
+      );
+
+      [-4.35, -2.55, 0.65, 2.15].forEach(function (mx) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.11, 3.85, 0.14),
+          frameDarkMat,
+          { pos: [mx, 1.92, 0.88], parent: storeGroup }
+        );
+      });
+      [-1.4, -3.7, -6.0, -8.15].forEach(function (mz) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.14, 3.85, 0.11),
+          frameDarkMat,
+          { pos: [3.7, 1.92, mz], parent: storeGroup }
+        );
+      });
+
+      // Exterior Rainwater Downspouts (雨樋) at building corners
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.045, 0.045, 5.2, 8),
+        getStandardMat(0x475569, { metalness: 0.6 }),
+        { pos: [3.88, 2.6, 1.05], parent: storeGroup, outline: false }
+      );
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.045, 0.045, 5.2, 8),
+        getStandardMat(0x475569, { metalness: 0.6 }),
+        { pos: [-7.22, 2.6, 1.02], parent: storeGroup, outline: false }
+      );
+
+      // 6.4 Expansive Crystal-Clear Glass Windows & Animated Sliding Doors (大面积玻璃橱窗与自动门)
+      const clearGlassMat = new THREE.MeshPhysicalMaterial({
+        color: 0xdbeafe,
+        transparent: true,
+        opacity: 0.14,
+        roughness: 0.04,
+        metalness: 0.1,
+        reflectivity: 0.9,
+        depthWrite: false
+      });
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(1.76, 3.25, 0.04),
+        clearGlassMat,
+        { pos: [-3.45, 2.18, 0.88], parent: storeGroup, outline: false, castShadow: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.96, 3.25, 0.04),
+        clearGlassMat,
+        { pos: [2.15, 2.18, 0.88], parent: storeGroup, outline: false, castShadow: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.04, 3.25, 8.85),
+        clearGlassMat,
+        { pos: [3.7, 2.18, -3.7], parent: storeGroup, outline: false, castShadow: false }
+      );
+
+      // Konbini decorative waist stripe across the glass windows
+      const stripeGreenMat = getToonMat(0x009b4d, { emissive: 0x009b4d, emissiveIntensity: 0.35 });
+      const stripeOrangeMat = getToonMat(0xff6b1a, { emissive: 0xff6b1a, emissiveIntensity: 0.35 });
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.96, 0.12, 0.06),
+        stripeGreenMat,
+        { pos: [2.15, 1.15, 0.89], parent: storeGroup, outline: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.96, 0.08, 0.06),
+        stripeOrangeMat,
+        { pos: [2.15, 1.03, 0.89], parent: storeGroup, outline: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.06, 0.12, 8.85),
+        stripeGreenMat,
+        { pos: [3.71, 1.15, -3.7], parent: storeGroup, outline: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.06, 0.08, 8.85),
+        stripeOrangeMat,
+        { pos: [3.71, 1.03, -3.7], parent: storeGroup, outline: false }
+      );
+
+      // Double Sliding Automatic Glass Doors (自动门)
+      function buildSlidingDoorPanel(width) {
+        const panelGroup = new THREE.Group();
+        createAnimeMesh(
+          new THREE.BoxGeometry(width, 0.1, 0.07),
+          frameDarkMat,
+          { pos: [0, 3.22, 0], parent: panelGroup }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(width, 0.16, 0.07),
+          frameDarkMat,
+          { pos: [0, 0.08, 0], parent: panelGroup }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.08, 3.25, 0.07),
+          frameDarkMat,
+          { pos: [-width / 2 + 0.04, 1.62, 0], parent: panelGroup }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.08, 3.25, 0.07),
+          frameDarkMat,
+          { pos: [width / 2 - 0.04, 1.62, 0], parent: panelGroup }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(width - 0.12, 3.05, 0.03),
+          clearGlassMat,
+          { pos: [0, 1.65, 0], parent: panelGroup, outline: false, castShadow: false }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(width - 0.14, 0.14, 0.05),
+          getToonMat(0x00a7e1, { emissive: 0x00a7e1, emissiveIntensity: 0.4 }),
+          { pos: [0, 1.55, 0], parent: panelGroup, outline: false }
+        );
+        return panelGroup;
+      }
+
+      const leftSlidingDoor = buildSlidingDoorPanel(1.56);
+      leftSlidingDoor.position.set(-1.73, 0.0, 0.86);
+      storeGroup.add(leftSlidingDoor);
+
+      const rightSlidingDoor = buildSlidingDoorPanel(1.56);
+      rightSlidingDoor.position.set(-0.17, 0.0, 0.86);
+      storeGroup.add(rightSlidingDoor);
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(3.2, 0.18, 0.22),
+        frameDarkMat,
+        { pos: [-0.95, 3.42, 0.95], parent: storeGroup }
+      );
+      const doorSensorLedMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
+      const doorSensorLed = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 10), doorSensorLedMat);
+      doorSensorLed.position.set(-0.95, 3.42, 1.07);
+      storeGroup.add(doorSensorLed);
+
+      // Entrance Welcome Mat (门口地垫)
+      const welcomeMatGroup = new THREE.Group();
+      welcomeMatGroup.position.set(-0.95, 0.015, 1.48);
+      storeGroup.add(welcomeMatGroup);
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.65, 0.03, 1.05),
+        getToonMat(0x1e293b),
+        { parent: welcomeMatGroup, subtle: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.42, 0.036, 0.84),
+        getToonMat(0x334155),
+        { pos: [0, 0.005, 0], parent: welcomeMatGroup, outline: false }
+      );
+      for (let r = -3; r <= 3; r++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(2.25, 0.04, 0.05),
+          getToonMat(0x0f172a),
+          { pos: [0, 0.008, r * 0.11], parent: welcomeMatGroup, outline: false }
+        );
+      }
+
+      // 6.5 Iconic Wrap-Around Illuminated Konbini Signboard (便利店发光招牌)
+      const signFrontMat = new THREE.MeshBasicMaterial({ map: konbiniSignTex });
+      const signCaseMat = getToonMat(0xf8fafc, { emissive: 0xffffff, emissiveIntensity: 0.35 });
+
+      const frontSignBox = createAnimeMesh(
+        new THREE.BoxGeometry(11.35, 1.15, 0.32),
+        signCaseMat,
+        { pos: [-1.6, 4.58, 1.06], parent: storeGroup }
+      );
+      const frontSignFace = new THREE.Mesh(
+        new THREE.PlaneGeometry(11.25, 1.08),
+        signFrontMat
+      );
+      frontSignFace.position.set(0, 0, 0.165);
+      frontSignBox.add(frontSignFace);
+
+      const sideSignBox = createAnimeMesh(
+        new THREE.BoxGeometry(0.32, 1.15, 12.75),
+        signCaseMat,
+        { pos: [3.9, 4.58, -5.2], parent: storeGroup }
+      );
+      const sideSignFace = new THREE.Mesh(
+        new THREE.PlaneGeometry(12.65, 1.08),
+        signFrontMat
+      );
+      sideSignFace.rotation.y = Math.PI / 2;
+      sideSignFace.position.set(0.165, 0, 0);
+      sideSignBox.add(sideSignFace);
+
+      // 6.6 Projecting Translucent Eaves & Awning Canopy (屋檐雨棚)
+      const awningMat = getToonMat(0x1e3a8a, {
+        transparent: true,
+        opacity: 0.88,
+        emissive: 0x3b82f6,
+        emissiveIntensity: 0.22
+      });
+      createAnimeMesh(
+        new THREE.BoxGeometry(11.2, 0.12, 1.25),
+        awningMat,
+        { pos: [-1.6, 3.66, 1.55], rot: [0.14, 0, 0], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(10.6, 0.06, 0.12),
+        new THREE.MeshBasicMaterial({ color: 0xfff3c4 }),
+        { pos: [-1.6, 3.68, 1.18], parent: storeGroup, outline: false }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(1.15, 0.12, 9.4),
+        awningMat,
+        { pos: [4.28, 3.66, -3.6], rot: [0, 0, -0.14], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.12, 0.06, 8.8),
+        new THREE.MeshBasicMaterial({ color: 0xfff3c4 }),
+        { pos: [3.95, 3.68, -3.6], parent: storeGroup, outline: false }
+      );
+
+      // 6.7 Store Roof with Skylight, Recessed Penthouse, Water Tank & Rooftop Billboard
+      // (屋顶天窗、二层阁楼水塔与天台霓虹广告牌)
+      const roofMat = getToonMat(0x334155, { four: true });
+      createAnimeMesh(new THREE.BoxGeometry(11.2, 0.24, 2.6), roofMat, { pos: [-1.6, 5.25, -0.3], parent: storeGroup });
+      createAnimeMesh(new THREE.BoxGeometry(11.2, 0.24, 3.2), roofMat, { pos: [-1.6, 5.25, -10.0], parent: storeGroup });
+      createAnimeMesh(new THREE.BoxGeometry(3.2, 0.24, 6.8), roofMat, { pos: [-5.6, 5.25, -5.0], parent: storeGroup });
+      createAnimeMesh(new THREE.BoxGeometry(2.2, 0.24, 6.8), roofMat, { pos: [2.9, 5.25, -5.0], parent: storeGroup });
+
+      // Framed Skylight over the convenience store sales floor
+      createAnimeMesh(
+        new THREE.BoxGeometry(5.8, 0.18, 6.6),
+        frameDarkMat,
+        { pos: [-0.9, 5.36, -5.0], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(5.4, 0.06, 6.2),
+        clearGlassMat,
+        { pos: [-0.9, 5.42, -5.0], parent: storeGroup, outline: false, castShadow: false }
+      );
+
+      // Roof Parapet Walls
+      createAnimeMesh(new THREE.BoxGeometry(11.35, 0.48, 0.24), wallCreamMat, { pos: [-1.6, 5.55, 0.96], parent: storeGroup });
+      createAnimeMesh(new THREE.BoxGeometry(11.35, 0.48, 0.24), wallCreamMat, { pos: [-1.6, 5.55, -11.48], parent: storeGroup });
+      createAnimeMesh(new THREE.BoxGeometry(0.24, 0.48, 12.6), wallCreamMat, { pos: [-7.12, 5.55, -5.26], parent: storeGroup });
+      createAnimeMesh(new THREE.BoxGeometry(0.24, 0.48, 12.6), wallCreamMat, { pos: [3.92, 5.55, -5.26], parent: storeGroup });
+
+      // Rooftop Penthouse Utility Structure & Elevated Water Tank (高置水槽) on rear-left roof
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.8, 2.2, 2.6),
+        getToonMat(0xcbd5e1, { four: true }),
+        { pos: [-5.4, 6.45, -9.6], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.96, 0.18, 2.76),
+        frameDarkMat,
+        { pos: [-5.4, 7.6, -9.6], parent: storeGroup }
+      );
+      // Warm glowing small louver window on rooftop penthouse
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.85, 0.55, 0.08),
+        getToonMat(0xfef08a, { emissive: 0xf59e0b, emissiveIntensity: 0.6 }),
+        { pos: [-5.4, 6.55, -8.28], parent: storeGroup }
+      );
+      // Cylindrical Rooftop Water Tank on steel frame
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.72, 0.72, 1.35, 16),
+        getToonMat(0xe2e8f0, { four: true }),
+        { pos: [-5.4, 8.65, -9.6], parent: storeGroup }
+      );
+      createAnimeMesh(
+        new THREE.ConeGeometry(0.76, 0.32, 16),
+        getToonMat(0x64748b),
+        { pos: [-5.4, 9.48, -9.6], parent: storeGroup }
+      );
+      // Rooftop HVAC Chiller & Ducts
+      createAnimeMesh(
+        new THREE.BoxGeometry(1.85, 0.95, 1.25),
+        getToonMat(0x94a3b8),
+        { pos: [-5.5, 5.85, -6.2], parent: storeGroup }
+      );
+      // Rooftop Illuminated Billboard Frame facing the street corner
+      const roofBillboard = createAnimeMesh(
+        new THREE.BoxGeometry(3.8, 1.35, 0.24),
+        signCaseMat,
+        { pos: [1.2, 6.65, -9.8], rot: [0, -0.35, 0], parent: storeGroup }
+      );
+      const roofBillboardFace = new THREE.Mesh(
+        new THREE.PlaneGeometry(3.65, 1.22),
+        signFrontMat
+      );
+      roofBillboardFace.position.z = 0.13;
+      roofBillboard.add(roofBillboardFace);
+
+      // =========================================================================
+      // 7. CONVENIENCE STORE INTERIOR FURNISHINGS (店内全套陈设 — 16类高精细元素)
+      // =========================================================================
+      const interiorGroup = new THREE.Group();
+      storeGroup.add(interiorGroup);
+
+      // 7.1 Ceiling Illuminated Fluorescent Light Panels & Hanging Category Lightboxes (店内灯箱)
+      const lightTubeMat = new THREE.MeshBasicMaterial({ color: 0xfffbeb });
+      [-4.8, -1.8, 1.2].forEach(function (lx) {
+        [-2.2, -5.4, -8.6].forEach(function (lz) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(1.8, 0.06, 0.32),
+            lightTubeMat,
+            { pos: [lx, 4.98, lz], parent: interiorGroup, outline: false, castShadow: false }
+          );
+        });
+      });
+
+      function addHangingLightbox(x, z, tex, rotY) {
+        const lbGroup = new THREE.Group();
+        lbGroup.position.set(x, 4.18, z);
+        lbGroup.rotation.y = rotY || 0;
+        [-0.9, 0.9].forEach(function (wx) {
+          createAnimeMesh(
+            new THREE.CylinderGeometry(0.015, 0.015, 0.75, 6),
+            frameDarkMat,
+            { pos: [wx, 0.55, 0], parent: lbGroup, outline: false, castShadow: false }
+          );
+        });
+        const box = createAnimeMesh(
+          new THREE.BoxGeometry(2.3, 0.42, 0.1),
+          new THREE.MeshBasicMaterial({ color: 0xffffff }),
+          { parent: lbGroup, interior: true, castShadow: false }
+        );
+        const face1 = new THREE.Mesh(new THREE.PlaneGeometry(2.24, 0.38), new THREE.MeshBasicMaterial({ map: tex }));
+        face1.position.z = 0.055;
+        box.add(face1);
+        const face2 = new THREE.Mesh(new THREE.PlaneGeometry(2.24, 0.38), new THREE.MeshBasicMaterial({ map: tex }));
+        face2.rotation.y = Math.PI;
+        face2.position.z = -0.055;
+        box.add(face2);
+        interiorGroup.add(lbGroup);
+      }
+      addHangingLightbox(2.1, -3.6, aisleSign1Tex, Math.PI / 2);
+      addHangingLightbox(-0.2, -4.8, aisleSign2Tex, 0);
+      addHangingLightbox(-1.5, -8.8, aisleSign3Tex, 0);
+
+      // 7.2 Window-Hanging Promotional Posters (宣传海报)
+      function addWindowPoster(x, y, z, rotY, tex) {
+        const pGroup = new THREE.Group();
+        pGroup.position.set(x, y, z);
+        pGroup.rotation.y = rotY;
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.76, 1.06, 0.03),
+          getToonMat(0xffffff),
+          { parent: pGroup, interior: true, castShadow: false }
+        );
+        const face = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.72, 1.02),
+          new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })
+        );
+        face.position.z = 0.02;
+        pGroup.add(face);
+        const backFace = face.clone();
+        backFace.position.z = -0.02;
+        backFace.rotation.y = Math.PI;
+        pGroup.add(backFace);
+        interiorGroup.add(pGroup);
+      }
+      addWindowPoster(-3.45, 2.45, 0.76, 0, posterCoffeeTex);
+      addWindowPoster(1.45, 2.55, 0.76, 0, posterOdenTex);
+      addWindowPoster(3.56, 2.55, -0.45, Math.PI / 2, posterBentoTex);
+      addWindowPoster(3.56, 2.55, -7.1, Math.PI / 2, posterSweetsTex);
+
+      // 7.3 Checkout Counter, Dual POS Registers, Cigarette Dispenser Rack, Coffee Machines, Oden & Hot Snack Case
+      // (收银台、双屏收银机、香烟背柜、意式咖啡机、关东煮柜台、热食保温柜)
+      const counterGroup = new THREE.Group();
+      counterGroup.position.set(-4.6, 0.08, -2.6);
+      interiorGroup.add(counterGroup);
+
+      const counterWoodMat = getToonMat(0xd4a373, { four: true });
+      const counterTopMat = getToonMat(0xf8f9fa, { four: true });
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(3.6, 0.92, 0.88),
+        counterWoodMat,
+        { pos: [0.4, 0.46, 1.2], parent: counterGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(3.7, 0.08, 0.96),
+        counterTopMat,
+        { pos: [0.4, 0.95, 1.2], parent: counterGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.88, 0.92, 2.8),
+        counterWoodMat,
+        { pos: [1.76, 0.46, -0.6], parent: counterGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.96, 0.08, 2.88),
+        counterTopMat,
+        { pos: [1.76, 0.95, -0.6], parent: counterGroup, interior: true }
+      );
+
+      // Overhead Cigarette Dispenser Rack & Hot Menu Lightbox behind checkout counter (たばこ銘柄棚)
+      const cigCabinet = createAnimeMesh(
+        new THREE.BoxGeometry(2.6, 1.25, 0.38),
+        getToonMat(0x1e293b),
+        { pos: [-0.2, 2.65, -1.6], parent: counterGroup, interior: true }
+      );
+      const packColors = [0xef4444, 0x3b82f6, 0x10b981, 0xfacc15, 0xf8fafc, 0x8b5cf6];
+      for (let cr = 0; cr < 3; cr++) {
+        for (let cc = 0; cc < 10; cc++) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.2, 0.3, 0.06),
+            getToonMat(packColors[(cr * 3 + cc) % packColors.length]),
+            { pos: [-1.08 + cc * 0.24, -0.36 + cr * 0.36, 0.18], parent: cigCabinet, outline: false }
+          );
+        }
+      }
+
+      // Impulse-buy candy/gum racks on front of checkout counter
+      const candyColors = [0xff595e, 0xffca3a, 0x8ac926, 0x1982c4, 0x6a4c93];
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 6; c++) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.22, 0.18, 0.08),
+            getToonMat(candyColors[(r * 6 + c) % candyColors.length]),
+            { pos: [-0.8 + c * 0.28, 0.35 + r * 0.28, 1.66], parent: counterGroup, interior: true }
+          );
+        }
+      }
+
+      // Dual POS Cash Registers
+      [-0.65, 0.55].forEach(function (rx) {
+        const posBase = createAnimeMesh(
+          new THREE.BoxGeometry(0.52, 0.16, 0.44),
+          getToonMat(0x343a40),
+          { pos: [rx, 1.07, 1.2], parent: counterGroup, interior: true }
+        );
+        const monitor = createAnimeMesh(
+          new THREE.BoxGeometry(0.44, 0.34, 0.06),
+          getToonMat(0x212529),
+          { pos: [0, 0.26, -0.05], rot: [-0.25, 0, 0], parent: posBase, interior: true }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.38, 0.26, 0.02),
+          getToonMat(0x38bdf8, { emissive: 0x38bdf8, emissiveIntensity: 0.6 }),
+          { pos: [0, 0, 0.035], parent: monitor, outline: false }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.26, 0.14, 0.05),
+          getToonMat(0x10b981, { emissive: 0x10b981, emissiveIntensity: 0.5 }),
+          { pos: [0.14, 0.36, 0.15], parent: posBase, interior: true }
+        );
+      });
+
+      // Oden Counter Pot (关东煮柜台 — 8-grid stainless broth pot)
+      const odenPot = createAnimeMesh(
+        new THREE.BoxGeometry(0.86, 0.22, 0.64),
+        getStandardMat(0xcbd5e1, { metalness: 0.65, roughness: 0.25 }),
+        { pos: [1.58, 1.1, 1.2], parent: counterGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.78, 0.04, 0.56),
+        getToonMat(0xf59e0b, { emissive: 0xd97706, emissiveIntensity: 0.45 }),
+        { pos: [0, 0.09, 0], parent: odenPot, outline: false }
+      );
+      for (let gx = -1; gx <= 1; gx++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.02, 0.12, 0.56),
+          getStandardMat(0x94a3b8, { metalness: 0.7 }),
+          { pos: [gx * 0.2, 0.08, 0], parent: odenPot, outline: false }
+        );
+      }
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.78, 0.12, 0.02),
+        getStandardMat(0x94a3b8, { metalness: 0.7 }),
+        { pos: [0, 0.08, 0], parent: odenPot, outline: false }
+      );
+      const odenItems = [
+        [-0.26, -0.14, 0xfef3c7], [-0.08, -0.14, 0xfde68a], [0.1, -0.14, 0x9ca3af], [0.28, -0.14, 0xfdba74],
+        [-0.26, 0.14, 0xfde047], [-0.08, 0.14, 0xfef08a], [0.1, 0.14, 0xd97706], [0.28, 0.14, 0xfca5a5]
+      ];
+      odenItems.forEach(function (oi) {
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.065, 0.065, 0.06, 12),
+          getToonMat(oi[2]),
+          { pos: [oi[0], 0.11, oi[1]], parent: odenPot, outline: false }
+        );
+      });
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.88, 0.32, 0.66),
+        clearGlassMat,
+        { pos: [1.58, 1.36, 1.2], parent: counterGroup, outline: false, castShadow: false }
+      );
+
+      // Hot Snack / Karaage & Steamed Bun Warmer Case
+      const hotCase = createAnimeMesh(
+        new THREE.BoxGeometry(0.68, 0.64, 0.56),
+        getToonMat(0xd97706, { emissive: 0xf59e0b, emissiveIntensity: 0.35 }),
+        { pos: [1.76, 1.31, 0.15], parent: counterGroup, interior: true }
+      );
+      for (let row = 0; row < 2; row++) {
+        for (let col = 0; col < 3; col++) {
+          createAnimeMesh(
+            new THREE.SphereGeometry(0.075, 10, 10),
+            getToonMat(row === 0 ? 0xfffbeb : 0xeab308),
+            { pos: [-0.16 + col * 0.16, -0.12 + row * 0.22, 0], scale: [1, 0.72, 1], parent: hotCase, outline: false }
+          );
+        }
+      }
+
+      // Twin Self-Serve Fresh Coffee Machines
+      [-1.0, -1.65].forEach(function (cz) {
+        const coffeeMachine = createAnimeMesh(
+          new THREE.BoxGeometry(0.56, 0.82, 0.52),
+          getToonMat(0x1f2937),
+          { pos: [1.76, 1.4, cz], parent: counterGroup, interior: true }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.06, 0.44, 0.38),
+          getStandardMat(0x9ca3af, { metalness: 0.7, roughness: 0.2 }),
+          { pos: [0.26, -0.08, 0], parent: coffeeMachine, outline: false }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.05, 0.12, 0.36),
+          getToonMat(0x38bdf8, { emissive: 0x38bdf8, emissiveIntensity: 0.8 }),
+          { pos: [0.27, 0.24, 0], parent: coffeeMachine, outline: false }
+        );
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.16, 0.12, 0.22, 12),
+          getToonMat(0x78350f),
+          { pos: [0, 0.52, 0], parent: coffeeMachine, interior: true }
+        );
+      });
+
+      // Green Shopping Basket Stack near the Entrance (買い物カゴ置き場)
+      for (let b = 0; b < 5; b++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.44, 0.14, 0.34),
+          getToonMat(0x009b4d),
+          { pos: [-2.25, 0.18 + b * 0.11, 0.32], parent: interiorGroup, interior: true }
+        );
+      }
+
+      // 7.4 Three Rows of Neatly Arranged Gondola Shelves + End-Cap Displays (整齐排列的货架)
+      function buildGondolaShelf(x, z, length) {
+        const shelfGroup = new THREE.Group();
+        shelfGroup.position.set(x, 0.08, z);
+
+        const shelfWhiteMat = getToonMat(0xf8fafc, { four: true });
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.14, 1.88, length),
+          shelfWhiteMat,
+          { pos: [0, 0.94, 0], parent: shelfGroup, interior: true }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.96, 0.14, length),
+          getToonMat(0x334155),
+          { pos: [0, 0.07, 0], parent: shelfGroup, interior: true }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.88, 0.08, length),
+          getToonMat(0x009b4d),
+          { pos: [0, 1.88, 0], parent: shelfGroup, interior: true }
+        );
+
+        const shelfHeights = [0.48, 0.92, 1.36, 1.76];
+        const productPalette = [
+          0xef4444, 0xf97316, 0xfacc15, 0x22c55e,
+          0x06b6d4, 0x3b82f6, 0xa855f7, 0xec4899, 0xfffbeb
+        ];
+
+        shelfHeights.forEach(function (sy, hIdx) {
+          if (hIdx < 3) {
+            createAnimeMesh(
+              new THREE.BoxGeometry(0.92, 0.05, length),
+              shelfWhiteMat,
+              { pos: [0, sy, 0], parent: shelfGroup, interior: true }
+            );
+          }
+          [-0.27, 0.27].forEach(function (sideX, sIdx) {
+            const count = Math.floor(length / 0.34);
+            for (let i = 0; i < count; i++) {
+              const pz = -length / 2 + 0.22 + i * 0.34;
+              const col = productPalette[(hIdx * 7 + i * 3 + sIdx * 5) % productPalette.length];
+              if ((hIdx + i) % 3 === 0) {
+                createAnimeMesh(
+                  new THREE.CylinderGeometry(0.095, 0.08, 0.24, 10),
+                  getToonMat(col),
+                  { pos: [sideX, sy + 0.14, pz], parent: shelfGroup, interior: true }
+                );
+              } else {
+                createAnimeMesh(
+                  new THREE.BoxGeometry(0.22, 0.28, 0.24),
+                  getToonMat(col),
+                  { pos: [sideX, sy + 0.16, pz], parent: shelfGroup, interior: true }
+                );
+              }
+            }
+          });
+        });
+
+        // Front End-Cap Promotional Display Stack facing the storefront window
+        const endCap = createAnimeMesh(
+          new THREE.BoxGeometry(0.84, 1.42, 0.42),
+          getToonMat(0xffedd5),
+          { pos: [0, 0.71, length / 2 + 0.22], parent: shelfGroup, interior: true }
+        );
+        for (let ec = 0; ec < 3; ec++) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.68, 0.26, 0.28),
+            getToonMat(productPalette[(ec * 2) % productPalette.length]),
+            { pos: [0, -0.36 + ec * 0.38, 0.08], parent: endCap, interior: true }
+          );
+        }
+
+        interiorGroup.add(shelfGroup);
+      }
+
+      buildGondolaShelf(-1.35, -5.8, 3.8);
+      buildGondolaShelf(0.25, -5.8, 3.8);
+      buildGondolaShelf(1.85, -5.8, 3.8);
+
+      // 7.5 Open Chilled Bento, Onigiri & Sandwich Showcase (便当区、三角饭团与三明治陈列柜)
+      const bentoCaseGroup = new THREE.Group();
+      bentoCaseGroup.position.set(2.98, 0.08, -3.5);
+      interiorGroup.add(bentoCaseGroup);
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.78, 0.36, 4.2),
+        getToonMat(0x1e293b),
+        { pos: [0, 0.18, 0], parent: bentoCaseGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.12, 1.95, 4.2),
+        getToonMat(0xf1f5f9),
+        { pos: [0.33, 0.975, 0], parent: bentoCaseGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.82, 0.22, 4.24),
+        getToonMat(0x009b4d, { emissive: 0x009b4d, emissiveIntensity: 0.4 }),
+        { pos: [0, 1.92, 0], parent: bentoCaseGroup, interior: true }
+      );
+
+      [0.45, 0.85, 1.25, 1.62].forEach(function (ty, tierIdx) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.68, 0.04, 4.1),
+          getToonMat(0xe2e8f0, { emissive: 0xfffbeb, emissiveIntensity: 0.35 }),
+          { pos: [-0.04, ty, 0], parent: bentoCaseGroup, interior: true }
+        );
+
+        for (let slot = 0; slot < 10; slot++) {
+          const sz = -1.85 + slot * 0.41;
+          if (tierIdx === 3) {
+            const onigiri = createAnimeMesh(
+              new THREE.CylinderGeometry(0.11, 0.11, 0.09, 3),
+              getToonMat(0xffffff),
+              { pos: [-0.08, ty + 0.09, sz], rot: [0, 0, Math.PI / 2], parent: bentoCaseGroup, interior: true }
+            );
+            createAnimeMesh(
+              new THREE.BoxGeometry(0.1, 0.1, 0.12),
+              getToonMat(0x111827),
+              { pos: [-0.03, 0, 0], parent: onigiri, outline: false }
+            );
+          } else if (tierIdx === 2) {
+            const sandCol = [0xfef08a, 0xfecdd3, 0xbbf7d0][slot % 3];
+            createAnimeMesh(
+              new THREE.CylinderGeometry(0.13, 0.13, 0.12, 3),
+              getToonMat(sandCol),
+              { pos: [-0.08, ty + 0.1, sz], rot: [0, Math.PI / 6, 0], parent: bentoCaseGroup, interior: true }
+            );
+          } else {
+            const bentoTray = createAnimeMesh(
+              new THREE.BoxGeometry(0.42, 0.09, 0.32),
+              getToonMat(slot % 2 === 0 ? 0x1f2937 : 0x991b1b),
+              { pos: [-0.08, ty + 0.065, sz], parent: bentoCaseGroup, interior: true }
+            );
+            createAnimeMesh(
+              new THREE.BoxGeometry(0.17, 0.04, 0.26),
+              getToonMat(0xffffff),
+              { pos: [-0.09, 0.04, 0], parent: bentoTray, outline: false }
+            );
+            createAnimeMesh(
+              new THREE.BoxGeometry(0.17, 0.04, 0.26),
+              getToonMat(slot % 2 === 0 ? 0xf97316 : 0xeab308),
+              { pos: [0.09, 0.04, 0], parent: bentoTray, outline: false }
+            );
+          }
+        }
+      });
+
+      // 7.6 Back-Wall Walk-In Refrigerated Beverage Coolers (靠墙大排冷饮柜 — 6扇发光玻璃门)
+      const coolerGroup = new THREE.Group();
+      coolerGroup.position.set(-1.3, 0.08, -10.65);
+      interiorGroup.add(coolerGroup);
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(8.8, 3.2, 0.88),
+        getToonMat(0xe2e8f0),
+        { pos: [0, 1.6, 0], parent: coolerGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(8.5, 2.9, 0.08),
+        new THREE.MeshBasicMaterial({ color: 0xecfeff }),
+        { pos: [0, 1.6, 0.05], parent: coolerGroup, outline: false }
+      );
+
+      const drinkColors = [0x16a34a, 0xd97706, 0x0284c7, 0xdc2626, 0xfacc15, 0xf8fafc, 0x9333ea];
+      for (let s = 0; s < 5; s++) {
+        const sy = 0.42 + s * 0.54;
+        createAnimeMesh(
+          new THREE.BoxGeometry(8.4, 0.04, 0.55),
+          getToonMat(0x94a3b8),
+          { pos: [0, sy, 0.15], parent: coolerGroup, outline: false }
+        );
+        for (let b = 0; b < 32; b++) {
+          const bx = -4.05 + b * 0.26;
+          const bCol = drinkColors[(s * 5 + b) % drinkColors.length];
+          createAnimeMesh(
+            new THREE.CylinderGeometry(0.068, 0.068, 0.34, 8),
+            getToonMat(bCol),
+            { pos: [bx, sy + 0.19, 0.22], parent: coolerGroup, outline: false }
+          );
+        }
+      }
+
+      for (let dIdx = 0; dIdx < 6; dIdx++) {
+        const dx = -3.65 + dIdx * 1.46;
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.06, 2.95, 0.06),
+          getToonMat(0x334155),
+          { pos: [dx - 0.7, 1.6, 0.45], parent: coolerGroup, interior: true }
+        );
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 0.55, 6),
+          getStandardMat(0xe2e8f0, { metalness: 0.8 }),
+          { pos: [dx - 0.55, 1.55, 0.5], parent: coolerGroup, outline: false }
+        );
+      }
+
+      // 7.7 Center Island Ice Cream Chest Freezer (中岛冰柜)
+      const freezerGroup = new THREE.Group();
+      freezerGroup.position.set(0.35, 0.08, -1.65);
+      interiorGroup.add(freezerGroup);
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.35, 0.86, 1.05),
+        getToonMat(0xf8fafc),
+        { pos: [0, 0.43, 0], parent: freezerGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.39, 0.22, 1.09),
+        getToonMat(0x0284c7, { emissive: 0x0284c7, emissiveIntensity: 0.35 }),
+        { pos: [0, 0.68, 0], parent: freezerGroup, interior: true }
+      );
+      const iceColors = [0xf472b6, 0x60a5fa, 0xfde047, 0x4ade80, 0xc084fc, 0xfb923c];
+      for (let ix = 0; ix < 6; ix++) {
+        for (let iz = 0; iz < 2; iz++) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.32, 0.16, 0.38),
+            getToonMat(iceColors[(ix + iz * 3) % iceColors.length]),
+            { pos: [-0.85 + ix * 0.34, 0.78, -0.22 + iz * 0.44], parent: freezerGroup, interior: true }
+          );
+        }
+      }
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.25, 0.03, 0.95),
+        clearGlassMat,
+        { pos: [0, 0.88, 0], parent: freezerGroup, outline: false, castShadow: false }
+      );
+
+      // 7.8 Window-Facing Magazine & Manga Rack (杂志架)
+      const magRackGroup = new THREE.Group();
+      magRackGroup.position.set(2.15, 0.08, 0.35);
+      interiorGroup.add(magRackGroup);
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.65, 1.32, 0.56),
+        getToonMat(0x475569),
+        { pos: [0, 0.66, 0], parent: magRackGroup, interior: true }
+      );
+      const magColors = [0xef4444, 0x3b82f6, 0xfacc15, 0x10b981, 0xec4899, 0xf97316, 0x8b5cf6, 0x06b6d4];
+      for (let tier = 0; tier < 3; tier++) {
+        for (let m = 0; m < 8; m++) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.28, 0.36, 0.05),
+            getToonMat(magColors[(tier * 3 + m) % magColors.length]),
+            {
+              pos: [-1.05 + m * 0.3, 0.42 + tier * 0.36, -0.12 + tier * 0.08],
+              rot: [-0.22, 0, 0],
+              parent: magRackGroup,
+              interior: true
+            }
+          );
+        }
+      }
+
+      // 7.9 Backroom Staff Door, Emergency Exit Sign, Storage Lockers & ATM (储物柜、后场门、ATM)
+      const staffDoor = createAnimeMesh(
+        new THREE.BoxGeometry(0.12, 2.35, 1.15),
+        getToonMat(0xd97706),
+        { pos: [-6.82, 1.25, -8.2], parent: interiorGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.22, 0.22, 0.14, 16),
+        getToonMat(0x93c5fd, { emissive: 0x60a5fa, emissiveIntensity: 0.4 }),
+        { pos: [0, 0.45, 0], rot: [0, 0, Math.PI / 2], parent: staffDoor, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.14, 0.28, 0.62),
+        new THREE.MeshBasicMaterial({ color: 0x22c55e }),
+        { pos: [-6.8, 2.65, -8.2], parent: interiorGroup, interior: true }
+      );
+
+      const lockerCabinet = createAnimeMesh(
+        new THREE.BoxGeometry(0.72, 2.15, 1.65),
+        getToonMat(0x64748b),
+        { pos: [-6.45, 1.15, -6.2], parent: interiorGroup, interior: true }
+      );
+      for (let lr = 0; lr < 3; lr++) {
+        for (let lc = 0; lc < 2; lc++) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.06, 0.58, 0.72),
+            getToonMat(0x94a3b8),
+            { pos: [0.35, -0.62 + lr * 0.64, -0.38 + lc * 0.76], parent: lockerCabinet, interior: true }
+          );
+        }
+      }
+
+      const atmMachine = createAnimeMesh(
+        new THREE.BoxGeometry(0.82, 1.68, 0.78),
+        getToonMat(0xf1f5f9),
+        { pos: [-6.35, 0.92, -9.9], parent: interiorGroup, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.84, 0.32, 0.8),
+        getToonMat(0xe11d48, { emissive: 0xe11d48, emissiveIntensity: 0.45 }),
+        { pos: [0, 0.72, 0], parent: atmMachine, interior: true }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.1, 0.42, 0.52),
+        getToonMat(0x38bdf8, { emissive: 0x38bdf8, emissiveIntensity: 0.7 }),
+        { pos: [0.38, 0.18, 0], rot: [0, 0, 0.3], parent: atmMachine, outline: false }
+      );
+
+      // =========================================================================
+      // 8. EXTERIOR JAPANESE STREET CORNER PROPS (外部20+典型日式街角元素)
+      // =========================================================================
+      const exteriorPropsGroup = new THREE.Group();
+      dioramaGroup.add(exteriorPropsGroup);
+
+      // 8.1 Twin Illuminated Vending Machines (自动贩卖机 x2)
+      function buildVendingMachine(x, z, bodyColor, frontTex, canColors) {
+        const vmGroup = new THREE.Group();
+        vmGroup.position.set(x, 0.24, z);
+
+        const cabinet = createAnimeMesh(
+          new THREE.BoxGeometry(1.18, 2.24, 0.82),
+          getToonMat(bodyColor, { four: true }),
+          { pos: [0, 1.12, 0], parent: vmGroup }
+        );
+        const frontFace = new THREE.Mesh(
+          new THREE.PlaneGeometry(1.12, 2.16),
+          new THREE.MeshBasicMaterial({ map: frontTex })
+        );
+        frontFace.position.set(0, 0, 0.416);
+        cabinet.add(frontFace);
+
+        [0.35, 0.68, 1.0].forEach(function (ry, rIdx) {
+          for (let c = 0; c < 6; c++) {
+            createAnimeMesh(
+              new THREE.CylinderGeometry(0.042, 0.042, 0.16, 8),
+              getToonMat(canColors[(rIdx * 3 + c) % canColors.length], {
+                emissive: canColors[(rIdx * 3 + c) % canColors.length],
+                emissiveIntensity: 0.35
+              }),
+              { pos: [-0.38 + c * 0.15, ry, 0.43], parent: cabinet, outline: false }
+            );
+          }
+        });
+
+        exteriorPropsGroup.add(vmGroup);
+      }
+
+      buildVendingMachine(
+        -6.35, 1.46,
+        0xd92b2b,
+        vendingRedTex,
+        [0xef4444, 0x22c55e, 0x3b82f6, 0xfacc15, 0xf97316, 0xffffff]
+      );
+      buildVendingMachine(
+        -5.05, 1.46,
+        0x1d6ec9,
+        vendingBlueTex,
+        [0x38bdf8, 0x1d4ed8, 0xfef08a, 0x4ade80, 0xa855f7, 0xf43f5e]
+      );
+
+      // 8.2 Trio of Japanese Konbini Recycling Trash Cans (分类垃圾桶 x3)
+      const binDefs = [
+        { x: -4.15, color: 0xe63946 },
+        { x: -3.58, color: 0x00a7e1 },
+        { x: -3.01, color: 0x2b9348 }
+      ];
+      binDefs.forEach(function (b) {
+        const binGroup = new THREE.Group();
+        binGroup.position.set(b.x, 0.24, 1.38);
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.5, 0.88, 0.52),
+          getToonMat(0xe2e8f0),
+          { pos: [0, 0.44, 0], parent: binGroup }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.52, 0.32, 0.54),
+          getToonMat(b.color),
+          { pos: [0, 0.98, 0], parent: binGroup }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.32, 0.14, 0.06),
+          getToonMat(0x0f172a),
+          { pos: [0, 0.98, 0.25], parent: binGroup, outline: false }
+        );
+        exteriorPropsGroup.add(binGroup);
+      });
+
+      // 8.3 Stainless Steel Umbrella Stand with Clear Vinyl Umbrellas (雨伞架与透明伞)
+      const umbStandGroup = new THREE.Group();
+      umbStandGroup.position.set(1.18, 0.24, 1.35);
+      exteriorPropsGroup.add(umbStandGroup);
+
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.78, 0.08, 0.44),
+        getStandardMat(0x64748b, { metalness: 0.7, roughness: 0.3 }),
+        { pos: [0, 0.04, 0], parent: umbStandGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.78, 0.05, 0.44),
+        getStandardMat(0x94a3b8, { metalness: 0.8, roughness: 0.2 }),
+        { pos: [0, 0.62, 0], parent: umbStandGroup }
+      );
+      [[-0.36, -0.19], [0.36, -0.19], [-0.36, 0.19], [0.36, 0.19]].forEach(function (up) {
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 0.62, 8),
+          getStandardMat(0xcbd5e1, { metalness: 0.8 }),
+          { pos: [up[0], 0.31, up[1]], parent: umbStandGroup, outline: false }
+        );
+      });
+
+      const umbConfigs = [
+        { x: -0.24, z: -0.06, col: 0xdbeafe, clear: true, rx: 0.12, rz: -0.08 },
+        { x: -0.1, z: 0.07, col: 0xe0f2fe, clear: true, rx: -0.08, rz: 0.06 },
+        { x: 0.04, z: -0.05, col: 0xef4444, clear: false, rx: 0.06, rz: 0.1 },
+        { x: 0.18, z: 0.06, col: 0xffffff, clear: true, rx: -0.1, rz: -0.05 },
+        { x: 0.28, z: -0.04, col: 0x1e3a8a, clear: false, rx: 0.09, rz: 0.08 }
+      ];
+      umbConfigs.forEach(function (u) {
+        const uStick = new THREE.Group();
+        uStick.position.set(u.x, 0.08, u.z);
+        uStick.rotation.set(u.rx, 0, u.rz);
+        createAnimeMesh(
+          new THREE.ConeGeometry(0.085, 0.76, 10),
+          u.clear
+            ? new THREE.MeshPhysicalMaterial({ color: u.col, transparent: true, opacity: 0.58, roughness: 0.1 })
+            : getToonMat(u.col),
+          { pos: [0, 0.42, 0], rot: [Math.PI, 0, 0], parent: uStick, subtle: true }
+        );
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.014, 0.014, 0.92, 6),
+          getToonMat(0xf8fafc),
+          { pos: [0, 0.48, 0], parent: uStick, outline: false }
+        );
+        createAnimeMesh(
+          new THREE.TorusGeometry(0.055, 0.016, 8, 12, Math.PI),
+          getToonMat(u.clear ? 0xffffff : 0x78350f),
+          { pos: [0.055, 0.93, 0], parent: uStick, outline: false }
+        );
+        umbStandGroup.add(uStick);
+      });
+
+      // 8.4 Detailed Japanese Commuter Bicycles (自行车 — Mamachari & Alley Bike)
+      function buildBicycle(x, z, rotY, frameHex) {
+        const bikeGroup = new THREE.Group();
+        bikeGroup.position.set(x, 0.24, z);
+        bikeGroup.rotation.y = rotY;
+        const bikeBody = new THREE.Group();
+        bikeBody.rotation.z = 0.09;
+        bikeGroup.add(bikeBody);
+
+        const tireMat = getToonMat(0x1e293b);
+        const rimMat = getStandardMat(0xcbd5e1, { metalness: 0.75, roughness: 0.25 });
+        const frameMat = getToonMat(frameHex, { four: true });
+        const leatherMat = getToonMat(0x78350f);
+
+        [-0.58, 0.58].forEach(function (wz) {
+          const wheel = new THREE.Group();
+          wheel.position.set(0, 0.36, wz);
+          bikeBody.add(wheel);
+
+          createAnimeMesh(
+            new THREE.TorusGeometry(0.34, 0.042, 10, 24),
+            tireMat,
+            { rot: [0, Math.PI / 2, 0], parent: wheel, subtle: true }
+          );
+          createAnimeMesh(
+            new THREE.TorusGeometry(0.295, 0.018, 8, 24),
+            rimMat,
+            { rot: [0, Math.PI / 2, 0], parent: wheel, outline: false }
+          );
+          for (let sp = 0; sp < 6; sp++) {
+            createAnimeMesh(
+              new THREE.CylinderGeometry(0.006, 0.006, 0.58, 4),
+              rimMat,
+              { rot: [(sp * Math.PI) / 6, 0, 0], parent: wheel, outline: false, castShadow: false }
+            );
+          }
+          createAnimeMesh(
+            new THREE.TorusGeometry(0.37, 0.025, 8, 16, Math.PI * 0.85),
+            frameMat,
+            { rot: [0, Math.PI / 2, Math.PI * 0.08], parent: wheel, outline: false }
+          );
+        });
+
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.026, 0.026, 0.58, 8),
+          frameMat,
+          { pos: [0, 0.58, -0.15], rot: [-0.24, 0, 0], parent: bikeBody }
+        );
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.026, 0.022, 0.68, 8),
+          frameMat,
+          { pos: [0, 0.62, 0.48], rot: [-0.28, 0, 0], parent: bikeBody }
+        );
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.026, 0.026, 0.66, 8),
+          frameMat,
+          { pos: [0, 0.5, 0.16], rot: [0.95, 0, 0], parent: bikeBody }
+        );
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 0.5, 8),
+          frameMat,
+          { pos: [0, 0.36, -0.34], rot: [Math.PI / 2, 0, 0], parent: bikeBody }
+        );
+
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.18, 0.08, 0.28),
+          leatherMat,
+          { pos: [0, 0.88, -0.22], parent: bikeBody }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.2, 0.04, 0.42),
+          rimMat,
+          { pos: [0, 0.74, -0.56], parent: bikeBody }
+        );
+
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 0.56, 8),
+          rimMat,
+          { pos: [0, 0.98, 0.38], rot: [0, 0, Math.PI / 2], parent: bikeBody }
+        );
+        [-0.26, 0.26].forEach(function (gx) {
+          createAnimeMesh(
+            new THREE.CylinderGeometry(0.026, 0.026, 0.14, 8),
+            leatherMat,
+            { pos: [gx, 0.95, 0.3], rot: [Math.PI / 2, 0, 0], parent: bikeBody }
+          );
+        });
+
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.36, 0.26, 0.28),
+          getStandardMat(0x334155, { metalness: 0.6, roughness: 0.3 }),
+          { pos: [0, 0.78, 0.62], parent: bikeBody }
+        );
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.045, 0.035, 0.09, 10),
+          getToonMat(0xfef08a, { emissive: 0xfef08a, emissiveIntensity: 0.45 }),
+          { pos: [0.16, 0.62, 0.58], rot: [Math.PI / 2, 0, 0], parent: bikeBody }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.28, 0.36, 0.03),
+          rimMat,
+          { pos: [0, 0.19, -0.62], rot: [0.18, 0, 0], parent: bikeBody }
+        );
+
+        exteriorPropsGroup.add(bikeGroup);
+      }
+
+      buildBicycle(4.32, -2.2, 0.12, 0x34d399);
+      buildBicycle(-7.85, 2.35, 1.38, 0xf87171);
+
+      // 8.5 Freestanding Street Corner Konbini Pylon Sign (街角立柱招牌)
+      const pylonGroup = new THREE.Group();
+      pylonGroup.position.set(3.85, 0.24, 2.55);
+      exteriorPropsGroup.add(pylonGroup);
+
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.16, 0.19, 6.2, 12),
+        getToonMat(0x334155),
+        { pos: [0, 3.1, 0], parent: pylonGroup }
+      );
+      const pylonBox = createAnimeMesh(
+        new THREE.BoxGeometry(1.15, 2.35, 0.34),
+        signCaseMat,
+        { pos: [0, 5.15, 0], parent: pylonGroup }
+      );
+      const pylonFaceF = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.08, 2.28),
+        new THREE.MeshBasicMaterial({ map: pylonSignTex })
+      );
+      pylonFaceF.position.z = 0.176;
+      pylonBox.add(pylonFaceF);
+      const pylonFaceB = pylonFaceF.clone();
+      pylonFaceB.rotation.y = Math.PI;
+      pylonFaceB.position.z = -0.176;
+      pylonBox.add(pylonFaceB);
+
+      // 8.6 Japanese Concrete Utility Pole, Transformers, Streetlamp & Sagging Power Lines
+      // (电线杆、变压器、路灯与自然下垂电线)
+      const mainPoleGroup = new THREE.Group();
+      mainPoleGroup.position.set(4.35, 0.24, 3.15);
+      exteriorPropsGroup.add(mainPoleGroup);
+
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.15, 0.26, 10.6, 14),
+        getToonMat(0x94a3b8, { four: true }),
+        { pos: [0, 5.3, 0], parent: mainPoleGroup }
+      );
+      for (let yb = 0; yb < 6; yb++) {
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.245, 0.252, 0.22, 14),
+          getToonMat(yb % 2 === 0 ? 0xfacc15 : 0x111827),
+          { pos: [0, 0.65 + yb * 0.22, 0], parent: mainPoleGroup, outline: false }
+        );
+      }
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.14, 0.95, 0.04),
+        getToonMat(0x0ca678),
+        { pos: [0, 2.55, 0.24], parent: mainPoleGroup }
+      );
+
+      [-0.38, 0.38].forEach(function (tx) {
+        const trans = createAnimeMesh(
+          new THREE.CylinderGeometry(0.26, 0.24, 0.82, 12),
+          getToonMat(0x64748b),
+          { pos: [tx, 7.35, 0.28], parent: mainPoleGroup }
+        );
+        [-0.08, 0.08].forEach(function (bx) {
+          createAnimeMesh(
+            new THREE.CylinderGeometry(0.035, 0.045, 0.18, 8),
+            getToonMat(0xf8fafc),
+            { pos: [bx, 0.48, 0], parent: trans, outline: false }
+          );
+        });
+      });
+
+      [8.45, 9.65].forEach(function (cy) {
+        const arm = createAnimeMesh(
+          new THREE.BoxGeometry(1.95, 0.1, 0.12),
+          getToonMat(0x475569),
+          { pos: [0, cy, 0], rot: [0, Math.PI / 4, 0], parent: mainPoleGroup }
+        );
+        [-0.75, -0.25, 0.25, 0.75].forEach(function (ix) {
+          createAnimeMesh(
+            new THREE.CylinderGeometry(0.045, 0.055, 0.16, 8),
+            getToonMat(0xffffff),
+            { pos: [ix, 0.12, 0], parent: arm, outline: false }
+          );
+        });
+      });
+
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.04, 0.05, 1.85, 8),
+        getToonMat(0x475569),
+        { pos: [0.55, 7.65, 0.55], rot: [0.45, Math.PI / 4, -0.65], parent: mainPoleGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.52, 0.12, 0.28),
+        new THREE.MeshBasicMaterial({ color: 0xdbeafe }),
+        { pos: [1.1, 7.92, 1.1], rot: [0, Math.PI / 4, 0], parent: mainPoleGroup }
+      );
+      const lightCone1 = new THREE.Mesh(
+        new THREE.ConeGeometry(3.4, 7.8, 24, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0x93c5fd,
+          transparent: true,
+          opacity: 0.065,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
+      lightCone1.position.set(1.1, 4.0, 1.1);
+      mainPoleGroup.add(lightCone1);
+
+      const leftPoleGroup = new THREE.Group();
+      leftPoleGroup.position.set(-8.6, 0.24, 3.25);
+      exteriorPropsGroup.add(leftPoleGroup);
+
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.12, 0.2, 8.8, 12),
+        getToonMat(0x94a3b8),
+        { pos: [0, 4.4, 0], parent: leftPoleGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(1.4, 0.09, 0.1),
+        getToonMat(0x475569),
+        { pos: [0, 7.9, 0], parent: leftPoleGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.45, 0.12, 0.26),
+        new THREE.MeshBasicMaterial({ color: 0xfef08a }),
+        { pos: [0.35, 6.2, 0.45], parent: leftPoleGroup }
+      );
+      const lightCone2 = new THREE.Mesh(
+        new THREE.ConeGeometry(2.8, 6.2, 20, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0xfde68a,
+          transparent: true,
+          opacity: 0.055,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
+      lightCone2.position.set(0.35, 3.1, 0.45);
+      leftPoleGroup.add(lightCone2);
+
+      // Overhead Catenary Sagging Power Lines
+      const wireMat = new THREE.LineBasicMaterial({ color: 0x0d1321, transparent: true, opacity: 0.88 });
+      function addPowerLine(pStart, pEnd, sag) {
+        const mid = new THREE.Vector3().addVectors(pStart, pEnd).multiplyScalar(0.5);
+        mid.y -= sag;
+        const curve = new THREE.QuadraticBezierCurve3(pStart, mid, pEnd);
+        const pts = curve.getPoints(28);
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const line = new THREE.Line(geo, wireMat);
+        exteriorPropsGroup.add(line);
+      }
+
+      addPowerLine(new THREE.Vector3(3.85, 9.85, 2.75), new THREE.Vector3(-8.2, 8.15, 3.25), 0.95);
+      addPowerLine(new THREE.Vector3(4.35, 9.85, 3.15), new THREE.Vector3(-8.6, 8.15, 3.25), 1.12);
+      addPowerLine(new THREE.Vector3(4.85, 8.65, 3.55), new THREE.Vector3(-8.9, 7.65, 3.25), 0.85);
+      addPowerLine(new THREE.Vector3(4.1, 8.65, 2.9), new THREE.Vector3(2.8, 5.75, 0.95), 0.55);
+      addPowerLine(new THREE.Vector3(4.5, 8.65, 3.3), new THREE.Vector3(3.85, 5.75, -6.8), 0.88);
+      addPowerLine(new THREE.Vector3(4.2, 9.85, 3.0), new THREE.Vector3(3.85, 5.95, -10.5), 1.05);
+      addPowerLine(new THREE.Vector3(-8.6, 7.8, 3.25), new THREE.Vector3(-7.1, 5.5, -2.5), 0.65);
+
+      // 8.7 Street Corner Guardrails (街角护栏)
+      function addGuardrailSegment(x, z, length, rotY) {
+        const grGroup = new THREE.Group();
+        grGroup.position.set(x, 0.24, z);
+        grGroup.rotation.y = rotY || 0;
+        const railWhiteMat = getToonMat(0xf8fafc);
+        const capYellowMat = getToonMat(0xfacc15);
+
+        [-length / 2 + 0.12, length / 2 - 0.12].forEach(function (px) {
+          createAnimeMesh(
+            new THREE.CylinderGeometry(0.045, 0.045, 0.78, 8),
+            railWhiteMat,
+            { pos: [px, 0.39, 0], parent: grGroup }
+          );
+          createAnimeMesh(
+            new THREE.CylinderGeometry(0.052, 0.052, 0.12, 8),
+            capYellowMat,
+            { pos: [px, 0.72, 0], parent: grGroup, outline: false }
+          );
+        });
+        [0.32, 0.64].forEach(function (ry) {
+          createAnimeMesh(
+            new THREE.CylinderGeometry(0.036, 0.036, length, 8),
+            railWhiteMat,
+            { pos: [0, ry, 0], rot: [0, 0, Math.PI / 2], parent: grGroup }
+          );
+        });
+        exteriorPropsGroup.add(grGroup);
+      }
+
+      addGuardrailSegment(-5.4, 3.48, 2.2, 0);
+      addGuardrailSegment(-2.8, 3.48, 2.2, 0);
+      addGuardrailSegment(4.68, -4.6, 2.2, Math.PI / 2);
+      addGuardrailSegment(4.68, -7.2, 2.2, Math.PI / 2);
+
+      // 8.8 Street Signs & Convex Traffic Mirror (路牌与街角广角凸面反光镜)
+      const signPostGroup = new THREE.Group();
+      signPostGroup.position.set(0.85, 0.24, 3.42);
+      exteriorPropsGroup.add(signPostGroup);
+
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.045, 0.045, 3.55, 8),
+        getStandardMat(0xcbd5e1, { metalness: 0.6 }),
+        { pos: [0, 1.77, 0], parent: signPostGroup }
+      );
+      const mirrorHead = new THREE.Group();
+      mirrorHead.position.set(0.12, 3.25, 0.12);
+      mirrorHead.rotation.set(0.15, 0.65, 0);
+      signPostGroup.add(mirrorHead);
+
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.42, 0.44, 0.12, 20),
+        getToonMat(0xf97316, { emissive: 0xea580c, emissiveIntensity: 0.25 }),
+        { rot: [Math.PI / 2, 0, 0], parent: mirrorHead }
+      );
+      createAnimeMesh(
+        new THREE.SphereGeometry(0.38, 20, 16),
+        getStandardMat(0x93c5fd, { metalness: 0.92, roughness: 0.05 }),
+        { pos: [0, 0, 0.03], scale: [1, 1, 0.28], parent: mirrorHead, outline: false }
+      );
+
+      const stopBoard = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.68, 0.68),
+        new THREE.MeshBasicMaterial({ map: stopSignTex, transparent: true, side: THREE.DoubleSide })
+      );
+      stopBoard.position.set(0, 2.48, 0.06);
+      signPostGroup.add(stopBoard);
+
+      const streetNameBoard = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.92, 0.34),
+        new THREE.MeshBasicMaterial({ map: streetNameSignTex, side: THREE.DoubleSide })
+      );
+      streetNameBoard.position.set(0.42, 2.92, 0);
+      streetNameBoard.rotation.y = -Math.PI / 6;
+      signPostGroup.add(streetNameBoard);
+
+      // 8.9 Overhanging Traffic Signal Light & Pedestrian Box (远处交通信号灯)
+      const trafficPoleGroup = new THREE.Group();
+      trafficPoleGroup.position.set(4.55, 0.24, -6.2);
+      exteriorPropsGroup.add(trafficPoleGroup);
+
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.1, 0.13, 6.2, 12),
+        getToonMat(0x475569),
+        { pos: [0, 3.1, 0], parent: trafficPoleGroup }
+      );
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.065, 0.08, 3.4, 10),
+        getToonMat(0x475569),
+        { pos: [1.65, 5.65, 0], rot: [0, 0, Math.PI / 2], parent: trafficPoleGroup }
+      );
+      const signalHousing = createAnimeMesh(
+        new THREE.BoxGeometry(1.45, 0.44, 0.42),
+        getToonMat(0x1e293b),
+        { pos: [2.45, 5.65, 0], parent: trafficPoleGroup }
+      );
+
+      const sigGreenMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
+      const sigYellowMat = new THREE.MeshBasicMaterial({ color: 0x3f3212 });
+      const sigRedMat = new THREE.MeshBasicMaterial({ color: 0x3b1219 });
+
+      const sigGreenLens = new THREE.Mesh(new THREE.SphereGeometry(0.14, 14, 14), sigGreenMat);
+      sigGreenLens.position.set(-0.44, 0, 0.18);
+      signalHousing.add(sigGreenLens);
+
+      const sigYellowLens = new THREE.Mesh(new THREE.SphereGeometry(0.14, 14, 14), sigYellowMat);
+      sigYellowLens.position.set(0, 0, 0.18);
+      signalHousing.add(sigYellowLens);
+
+      const sigRedLens = new THREE.Mesh(new THREE.SphereGeometry(0.14, 14, 14), sigRedMat);
+      sigRedLens.position.set(0.44, 0, 0.18);
+      signalHousing.add(sigRedLens);
+
+      const pedBox = createAnimeMesh(
+        new THREE.BoxGeometry(0.36, 0.72, 0.34),
+        getToonMat(0x1e293b),
+        { pos: [0.22, 3.35, 0.25], parent: trafficPoleGroup }
+      );
+      const pedRedLens = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.24), sigRedMat);
+      pedRedLens.position.set(0, 0.16, 0.175);
+      pedBox.add(pedRedLens);
+      const pedGreenLens = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.24), sigGreenMat);
+      pedGreenLens.position.set(0, -0.16, 0.175);
+      pedBox.add(pedGreenLens);
+
+      // 8.10 Outdoor Air Conditioner Units with Rotating Fans & Pipes (空调外机)
+      const acFans = [];
+      function addOutdoorACUnit(x, y, z, rotY) {
+        const acGroup = new THREE.Group();
+        acGroup.position.set(x, y, z);
+        acGroup.rotation.y = rotY;
+
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.96, 0.08, 0.48),
+          getToonMat(0x475569),
+          { pos: [0, -0.38, 0], parent: acGroup }
+        );
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.92, 0.68, 0.42),
+          getToonMat(0xe2e8f0, { four: true }),
+          { parent: acGroup }
+        );
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.25, 0.25, 0.06, 16),
+          getToonMat(0x0f172a),
+          { pos: [-0.15, 0, 0.19], rot: [Math.PI / 2, 0, 0], parent: acGroup, outline: false }
+        );
+        const fanHub = new THREE.Group();
+        fanHub.position.set(-0.15, 0, 0.21);
+        acGroup.add(fanHub);
+        for (let b = 0; b < 3; b++) {
+          const blade = new THREE.Mesh(
+            new THREE.BoxGeometry(0.42, 0.09, 0.02),
+            getToonMat(0x334155)
+          );
+          blade.rotation.z = (b * Math.PI) / 1.5;
+          fanHub.add(blade);
+        }
+        acFans.push(fanHub);
+
+        for (let g = -2; g <= 2; g++) {
+          createAnimeMesh(
+            new THREE.BoxGeometry(0.5, 0.02, 0.02),
+            getToonMat(0x94a3b8),
+            { pos: [-0.15, g * 0.09, 0.23], parent: acGroup, outline: false }
+          );
+        }
+        createAnimeMesh(
+          new THREE.CylinderGeometry(0.035, 0.035, 1.35, 8),
+          getToonMat(0xcbd5e1),
+          { pos: [0.52, 0.45, -0.1], parent: acGroup }
+        );
+
+        exteriorPropsGroup.add(acGroup);
+      }
+
+      addOutdoorACUnit(4.06, 0.95, -9.4, Math.PI / 2);
+      addOutdoorACUnit(4.06, 1.92, -9.4, Math.PI / 2);
+      addOutdoorACUnit(-7.42, 0.95, -3.6, -Math.PI / 2);
+      addOutdoorACUnit(-7.42, 1.92, -3.6, -Math.PI / 2);
+
+      // 8.11 Small Community Bulletin Board & Classic Red Japanese Postbox (小型公告栏与红色邮筒)
+      const boardGroup = new THREE.Group();
+      boardGroup.position.set(-10.1, 0.24, 2.85);
+      boardGroup.rotation.y = 0.15;
+      exteriorPropsGroup.add(boardGroup);
+
+      [-0.85, 0.85].forEach(function (px) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.14, 2.15, 0.14),
+          getToonMat(0x5c3a21),
+          { pos: [px, 1.07, 0], parent: boardGroup }
+        );
+      });
+      const boardCabinet = createAnimeMesh(
+        new THREE.BoxGeometry(1.92, 1.18, 0.16),
+        getToonMat(0x6f4528),
+        { pos: [0, 1.48, 0], parent: boardGroup }
+      );
+      const boardFace = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.78, 1.06),
+        new THREE.MeshBasicMaterial({ map: bulletinBoardTex })
+      );
+      boardFace.position.z = 0.086;
+      boardCabinet.add(boardFace);
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.18, 0.14, 0.48),
+        getToonMat(0x2d6a4f),
+        { pos: [0, 2.16, 0.04], rot: [0.22, 0, 0], parent: boardGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(1.65, 0.05, 0.08),
+        new THREE.MeshBasicMaterial({ color: 0xfef08a }),
+        { pos: [0, 2.06, 0.15], parent: boardGroup, outline: false }
+      );
+
+      // Iconic Red Japanese Postbox (郵便ポスト 〒) next to bulletin board
+      const postboxGroup = new THREE.Group();
+      postboxGroup.position.set(-11.75, 0.24, 2.75);
+      exteriorPropsGroup.add(postboxGroup);
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.12, 0.14, 0.55, 10),
+        getToonMat(0x334155),
+        { pos: [0, 0.27, 0], parent: postboxGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.58, 0.78, 0.46),
+        getToonMat(0xdc2626, { four: true }),
+        { pos: [0, 0.92, 0], parent: postboxGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.62, 0.08, 0.52),
+        getToonMat(0xb91c1c),
+        { pos: [0, 1.32, 0], parent: postboxGroup }
+      );
+
+      // 8.12 Narrow Atmospheric Japanese Side Alley & Izakaya Micro-Scene
+      // (小巷入口、居酒屋暖帘、红提灯、外楼梯、啤酒箱与踏步石)
+      const alleyGroup = new THREE.Group();
+      alleyGroup.position.set(0, 0.24, 0);
+      exteriorPropsGroup.add(alleyGroup);
+
+      // Concrete block wall (ブロック塀) along the left border
+      const blockWallMat = getToonMat(0x64748b, { four: true });
+      createAnimeMesh(
+        new THREE.BoxGeometry(0.36, 2.35, 13.8),
+        blockWallMat,
+        { pos: [-12.55, 1.175, -5.8], parent: alleyGroup }
+      );
+      // 2-story Izakaya & Apartment building in the back-left of the alley
+      createAnimeMesh(
+        new THREE.BoxGeometry(4.6, 6.6, 5.2),
+        getToonMat(0x283246, { four: true }),
+        { pos: [-10.2, 3.3, -9.8], parent: alleyGroup }
+      );
+      // Warm glowing frosted 2nd-floor apartment windows
+      [-11.1, -9.3].forEach(function (wx) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(1.15, 1.1, 0.1),
+          getToonMat(0xfde68a, { emissive: 0xf59e0b, emissiveIntensity: 0.65 }),
+          { pos: [wx, 4.75, -7.18], parent: alleyGroup }
+        );
+      });
+      // Glowing wooden lattice sliding door (格子戸) & Indigo Noren Curtain (のれん) on 1st floor of Izakaya
+      createAnimeMesh(
+        new THREE.BoxGeometry(1.55, 2.15, 0.12),
+        getToonMat(0xffedd5, { emissive: 0xf59e0b, emissiveIntensity: 0.55 }),
+        { pos: [-10.2, 1.15, -7.18], parent: alleyGroup }
+      );
+      createAnimeMesh(
+        new THREE.BoxGeometry(2.6, 0.16, 0.92),
+        getToonMat(0x4a2c11),
+        { pos: [-10.2, 2.85, -6.85], rot: [0.22, 0, 0], parent: alleyGroup }
+      );
+      const norenMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.52, 0.62),
+        new THREE.MeshBasicMaterial({ map: izakayaNorenTex, side: THREE.DoubleSide })
+      );
+      norenMesh.position.set(-10.2, 2.38, -6.58);
+      alleyGroup.add(norenMesh);
+
+      // Glowing Red Chochin Paper Lanterns (赤提灯 x2)
+      const chochinGroup = new THREE.Group();
+      chochinGroup.position.set(-9.15, 2.38, -6.55);
+      alleyGroup.add(chochinGroup);
+      createAnimeMesh(
+        new THREE.SphereGeometry(0.28, 14, 14),
+        getToonMat(0xef4444, { emissive: 0xff3b1f, emissiveIntensity: 0.88 }),
+        { scale: [1, 1.38, 1], parent: chochinGroup }
+      );
+      createAnimeMesh(
+        new THREE.CylinderGeometry(0.14, 0.14, 0.84, 12),
+        getToonMat(0x111827),
+        { parent: chochinGroup, outline: false }
+      );
+
+      // Vertical retro neon snack bar sign in the alley
+      const alleyNeonSign = createAnimeMesh(
+        new THREE.BoxGeometry(0.28, 1.75, 0.62),
+        getToonMat(0xf472b6, { emissive: 0xec4899, emissiveIntensity: 0.82 }),
+        { pos: [-12.15, 3.75, -4.2], parent: alleyGroup }
+      );
+
+      // Stacked yellow, red & blue plastic beer crates in the alley
+      const crateColors = [0xeab308, 0xdc2626, 0xeab308, 0x2563eb, 0xdc2626, 0xeab308];
+      for (let cIdx = 0; cIdx < 6; cIdx++) {
+        const cx = -7.65 - (cIdx % 2) * 0.58;
+        const cy = 0.22 + Math.floor(cIdx / 2) * 0.44;
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.54, 0.42, 0.44),
+          getToonMat(crateColors[cIdx]),
+          { pos: [cx, cy, -5.8 + (cIdx % 2) * 0.48], parent: alleyGroup }
+        );
+      }
+
+      // Wet concrete stepping stones along the narrow alley floor
+      for (let st = 0; st < 7; st++) {
+        createAnimeMesh(
+          new THREE.BoxGeometry(0.88, 0.04, 0.62),
+          getToonMat(0x64748b),
+          { pos: [-9.5 + (st % 2) * 0.35, 0.02, 1.2 - st * 1.15], parent: alleyGroup, subtle: true }
+        );
+      }
+
+      // Potted street plants outside store corner & alley entrance
+      [[-7.55, 1.35], [4.15, 0.95], [-11.8, 1.65]].forEach(function (pp) {
+        const pot = createAnimeMesh(
+          new THREE.CylinderGeometry(0.24, 0.18, 0.34, 10),
+          getToonMat(0xb45309),
+          { pos: [pp[0], 0.17, pp[1]], parent: alleyGroup }
+        );
+        createAnimeMesh(
+          new THREE.DodecahedronGeometry(0.32, 1),
+          getToonMat(0x15803d),
+          { pos: [0, 0.32, 0], scale: [1, 1.25, 1], parent: pot }
+        );
+      });
+
+      // =========================================================================
+      // 9. REAL-TIME MIRRORED NEON & INTERIOR REFLECTIONS IN WET PUDDLES
+      // =========================================================================
+      const reflStoreInterior = new THREE.Mesh(
+        new THREE.BoxGeometry(9.6, 3.6, 8.8),
+        new THREE.MeshBasicMaterial({ color: 0xffd27d, transparent: true, opacity: 0.36 })
+      );
+      reflStoreInterior.position.set(-0.8, 2.1, -3.2);
+      reflectionGroup.add(reflStoreInterior);
+
+      const reflFasciaFront = new THREE.Mesh(
+        new THREE.BoxGeometry(11.3, 1.1, 0.4),
+        new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.48 })
+      );
+      reflFasciaFront.position.set(-1.6, 4.8, 1.1);
+      reflectionGroup.add(reflFasciaFront);
+
+      const reflFasciaOrange = new THREE.Mesh(
+        new THREE.BoxGeometry(11.3, 0.45, 0.42),
+        new THREE.MeshBasicMaterial({ color: 0xff6b1a, transparent: true, opacity: 0.52 })
+      );
+      reflFasciaOrange.position.set(-1.6, 4.3, 1.12);
+      reflectionGroup.add(reflFasciaOrange);
+
+      const reflFasciaSide = new THREE.Mesh(
+        new THREE.BoxGeometry(0.4, 1.1, 12.6),
+        new THREE.MeshBasicMaterial({ color: 0x00a7e1, transparent: true, opacity: 0.45 })
+      );
+      reflFasciaSide.position.set(3.9, 4.8, -5.2);
+      reflectionGroup.add(reflFasciaSide);
+
+      const reflVendingRed = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 2.2, 0.8),
+        new THREE.MeshBasicMaterial({ color: 0xff4d6d, transparent: true, opacity: 0.46 })
+      );
+      reflVendingRed.position.set(-6.35, 1.35, 1.5);
+      reflectionGroup.add(reflVendingRed);
+
+      const reflVendingBlue = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 2.2, 0.8),
+        new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.48 })
+      );
+      reflVendingBlue.position.set(-5.05, 1.35, 1.5);
+      reflectionGroup.add(reflVendingBlue);
+
+      const reflPylon = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 2.4, 0.4),
+        new THREE.MeshBasicMaterial({ color: 0xff922b, transparent: true, opacity: 0.5 })
+      );
+      reflPylon.position.set(3.85, 5.2, 2.55);
+      reflectionGroup.add(reflPylon);
+
+      const reflTrafficGlow = new THREE.Mesh(
+        new THREE.SphereGeometry(1.35, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.45 })
+      );
+      reflTrafficGlow.position.set(7.0, 2.2, -5.5);
+      reflectionGroup.add(reflTrafficGlow);
+
+      const wetStreakGeo = new THREE.PlaneGeometry(3.2, 4.8);
+      const wetWarmStreakMat = new THREE.MeshBasicMaterial({
+        color: 0xffcf70,
+        transparent: true,
+        opacity: 0.18,
+        depthWrite: false
+      });
+      const doorWetReflection = new THREE.Mesh(wetStreakGeo, wetWarmStreakMat);
+      doorWetReflection.rotation.x = -Math.PI / 2;
+      doorWetReflection.position.set(-0.95, 0.026, 6.2);
+      dioramaGroup.add(doorWetReflection);
+
+      const trafficWetReflectionMat = new THREE.MeshBasicMaterial({
+        color: 0x22c55e,
+        transparent: true,
+        opacity: 0.2,
+        depthWrite: false
+      });
+      const trafficWetReflection = new THREE.Mesh(
+        new THREE.PlaneGeometry(3.6, 5.2),
+        trafficWetReflectionMat
+      );
+      trafficWetReflection.rotation.x = -Math.PI / 2;
+      trafficWetReflection.position.set(7.8, 0.026, -3.5);
+      dioramaGroup.add(trafficWetReflection);
+
+      // =========================================================================
+      // 10. DYNAMIC LIFE & WEATHER ANIMATION SYSTEMS (8大动态生命力系统)
+      // =========================================================================
+      // 10.1 Continuous Slanted Anime Rainfall (持续降雨 — 1,500 rain streaks)
+      const RAIN_COUNT = 1500;
+      const rainPositions = new Float32Array(RAIN_COUNT * 6);
+      const rainVelocities = new Float32Array(RAIN_COUNT);
+      for (let i = 0; i < RAIN_COUNT; i++) {
+        const rx = (Math.random() - 0.5) * 25.2;
+        const ry = Math.random() * 16.0 + 0.5;
+        const rz = (Math.random() - 0.5) * 25.2;
+        const streakLen = 0.65 + Math.random() * 0.45;
+        rainPositions[i * 6] = rx;
+        rainPositions[i * 6 + 1] = ry;
+        rainPositions[i * 6 + 2] = rz;
+        rainPositions[i * 6 + 3] = rx - 0.09;
+        rainPositions[i * 6 + 4] = ry - streakLen;
+        rainPositions[i * 6 + 5] = rz + 0.06;
+        rainVelocities[i] = 15.5 + Math.random() * 6.5;
+      }
+      const rainGeo = new THREE.BufferGeometry();
+      rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
+      const rainMat = new THREE.LineBasicMaterial({
+        color: 0xa5c4ff,
+        transparent: true,
+        opacity: 0.36
+      });
+      const rainSystem = new THREE.LineSegments(rainGeo, rainMat);
+      dioramaGroup.add(rainSystem);
+
+      // 10.2 Eaves Water Droplets Dripping & Sidewalk Splash (屋檐滴水)
+      const EAVE_DROP_COUNT = 26;
+      const eaveDrops = [];
+      const dropGeo = new THREE.SphereGeometry(0.032, 6, 6);
+      dropGeo.scale(0.8, 1.8, 0.8);
+      const dropMat = new THREE.MeshBasicMaterial({
+        color: 0xdbeafe,
+        transparent: true,
+        opacity: 0.85
+      });
+
+      for (let i = 0; i < EAVE_DROP_COUNT; i++) {
+        const isFront = i < 16;
+        const dx = isFront ? (-6.8 + (i / 15) * 10.4) : 4.82;
+        const dz = isFront ? 2.15 : (-8.0 + ((i - 16) / 9) * 8.4);
+        const dropMesh = new THREE.Mesh(dropGeo, dropMat);
+        dropMesh.position.set(dx, 3.82, dz);
+        dioramaGroup.add(dropMesh);
+
+        const splashRing = new THREE.Mesh(
+          new THREE.RingGeometry(0.03, 0.06, 16),
+          new THREE.MeshBasicMaterial({
+            color: 0xbfdbfe,
+            transparent: true,
+            opacity: 0.0,
+            side: THREE.DoubleSide
+          })
+        );
+        splashRing.rotation.x = -Math.PI / 2;
+        splashRing.position.set(dx, 0.255, dz);
+        dioramaGroup.add(splashRing);
+
+        eaveDrops.push({
+          mesh: dropMesh,
+          splash: splashRing,
+          x: dx,
+          z: dz,
+          phase: Math.random() * 2.5,
+          speed: 1.2 + Math.random() * 0.55
+        });
+      }
+
+      // 10.3 Ground Puddle Concentric Ripples (地面积水波纹 — 50 animated rings)
+      const RIPPLE_COUNT = 50;
+      const ripples = [];
+      const rippleBaseGeo = new THREE.RingGeometry(0.08, 0.105, 24);
+      for (let i = 0; i < RIPPLE_COUNT; i++) {
+        const rMat = new THREE.MeshBasicMaterial({
+          color: i % 3 === 0 ? 0x93c5fd : 0xe0f2fe,
+          transparent: true,
+          opacity: 0.6,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+        const rMesh = new THREE.Mesh(rippleBaseGeo, rMat);
+        rMesh.rotation.x = -Math.PI / 2;
+
+        const pRef = puddleDefs[i % puddleDefs.length];
+        const angle = Math.random() * Math.PI * 2;
+        const dist = Math.random() * 0.72;
+        const rx = pRef.x + Math.cos(angle) * pRef.rx * dist;
+        const rz = pRef.z + Math.sin(angle) * pRef.rz * dist;
+        const ry = (pRef.y !== undefined ? pRef.y : 0.022) + 0.012;
+        rMesh.position.set(rx, ry, rz);
+        dioramaGroup.add(rMesh);
+
+        ripples.push({
+          mesh: rMesh,
+          mat: rMat,
+          progress: Math.random(),
+          speed: 0.45 + Math.random() * 0.45,
+          maxScale: 1.8 + Math.random() * 2.2
+        });
+      }
+
+      // 10.4 Rainwater Sliding Down Storefront Glass Windows (雨水沿玻璃滑落)
+      const GLASS_DROP_COUNT = 42;
+      const glassDrops = [];
+      const glassDropGeo = new THREE.BoxGeometry(0.018, 0.18, 0.018);
+      const glassDropMat = new THREE.MeshBasicMaterial({
+        color: 0xe0f2fe,
+        transparent: true,
+        opacity: 0.65
+      });
+
+      for (let i = 0; i < GLASS_DROP_COUNT; i++) {
+        const onFront = i < 20;
+        const gx = onFront
+          ? (i < 8 ? (-4.1 + (i / 7) * 1.3) : (0.85 + ((i - 8) / 11) * 2.6))
+          : 3.73;
+        const gz = onFront ? 0.91 : (-7.9 + ((i - 20) / 21) * 8.4);
+        const gMesh = new THREE.Mesh(glassDropGeo, glassDropMat);
+        const startY = 1.0 + Math.random() * 2.4;
+        gMesh.position.set(gx, startY, gz);
+        storeGroup.add(gMesh);
+
+        glassDrops.push({
+          mesh: gMesh,
+          y: startY,
+          speed: 0.35 + Math.random() * 0.45
+        });
+      }
+
+      // 10.5 Rising Warm Steam Particles Above the Interior Oden Pot (关东煮袅袅热气)
+      const steamWisps = [];
+      for (let i = 0; i < 10; i++) {
+        const sMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.35,
+          depthWrite: false
+        });
+        const sMesh = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), sMat);
+        const sx = -3.02 + (Math.random() - 0.5) * 0.45;
+        const sz = -1.4 + (Math.random() - 0.5) * 0.35;
+        sMesh.position.set(sx, 1.35 + Math.random() * 0.4, sz);
+        interiorGroup.add(sMesh);
+        steamWisps.push({
+          mesh: sMesh,
+          mat: sMat,
+          baseX: sx,
+          baseZ: sz,
+          progress: Math.random()
+        });
+      }
+
+      // =========================================================================
+      // 11. MAIN ANIMATION LOOP & RESIZE HANDLER
+      // =========================================================================
+      const clock = new THREE.Clock();
+
+      function animate() {
+        requestAnimationFrame(animate);
+        const dt = Math.min(clock.getDelta(), 0.05);
+        const elapsed = clock.getElapsedTime();
+
+        puddleShaderMat.uniforms.uTime.value = elapsed;
+        skyDomeMat.uniforms.uTime.value = elapsed;
+
+        if (controls && typeof controls.update === 'function') {
+          controls.update();
+        }
+
+        // 1) Continuous slanted rainfall update
+        const posAttr = rainGeo.attributes.position;
+        const arr = posAttr.array;
+        for (let i = 0; i < RAIN_COUNT; i++) {
+          const vy = rainVelocities[i] * dt;
+          const vx = -vy * 0.11;
+          const vz = vy * 0.07;
+          arr[i * 6] += vx;
+          arr[i * 6 + 1] -= vy;
+          arr[i * 6 + 2] += vz;
+          arr[i * 6 + 3] += vx;
+          arr[i * 6 + 4] -= vy;
+          arr[i * 6 + 5] += vz;
+
+          if (arr[i * 6 + 1] < 0.1) {
+            const resetX = (Math.random() - 0.5) * 25.0;
+            const resetY = 15.5 + Math.random() * 2.0;
+            const resetZ = (Math.random() - 0.5) * 25.0;
+            arr[i * 6] = resetX;
+            arr[i * 6 + 1] = resetY;
+            arr[i * 6 + 2] = resetZ;
+            arr[i * 6 + 3] = resetX - 0.09;
+            arr[i * 6 + 4] = resetY - 0.85;
+            arr[i * 6 + 5] = resetZ + 0.06;
+          }
+        }
+        posAttr.needsUpdate = true;
+
+        // 2) Eaves water droplets swelling, falling & sidewalk splash rings
+        for (let i = 0; i < EAVE_DROP_COUNT; i++) {
+          const dObj = eaveDrops[i];
+          const t = (elapsed * dObj.speed + dObj.phase) % 2.2;
+          if (t < 0.7) {
+            dObj.mesh.visible = true;
+            dObj.mesh.position.y = 3.82;
+            const swell = 0.4 + (t / 0.7) * 0.75;
+            dObj.mesh.scale.setScalar(swell);
+            dObj.splash.material.opacity = 0;
+          } else if (t < 1.35) {
+            const fallProgress = (t - 0.7) / 0.65;
+            dObj.mesh.position.y = 3.82 - fallProgress * fallProgress * 3.55;
+            dObj.mesh.scale.set(0.8, 1.4, 0.8);
+            dObj.splash.material.opacity = 0;
+          } else {
+            dObj.mesh.visible = false;
+            const sp = (t - 1.35) / 0.85;
+            dObj.splash.scale.setScalar(1.0 + sp * 3.4);
+            dObj.splash.material.opacity = (1.0 - sp) * 0.65;
+          }
+        }
+
+        // 3) Ground puddle concentric ripples expanding & fading
+        for (let i = 0; i < RIPPLE_COUNT; i++) {
+          const rp = ripples[i];
+          rp.progress += dt * rp.speed;
+          if (rp.progress >= 1.0) rp.progress -= 1.0;
+          const sc = 0.25 + rp.progress * rp.maxScale;
+          rp.mesh.scale.set(sc, sc, 1);
+          rp.mat.opacity = (1.0 - rp.progress) * 0.52;
+        }
+
+        // 4) Rainwater droplets sliding down storefront glass windows
+        for (let i = 0; i < GLASS_DROP_COUNT; i++) {
+          const gd = glassDrops[i];
+          gd.y -= dt * gd.speed;
+          if (gd.y < 0.85) gd.y = 3.45;
+          gd.mesh.position.y = gd.y;
+        }
+
+        // 5) Automatic Sliding Doors periodic opening & closing + warm light spill
+        const doorCycle = elapsed % 9.0;
+        let openFactor = 0.0;
+        if (doorCycle >= 3.5 && doorCycle < 4.5) {
+          const p = (doorCycle - 3.5) / 1.0;
+          openFactor = p * p * (3 - 2 * p);
+        } else if (doorCycle >= 4.5 && doorCycle < 6.8) {
+          openFactor = 1.0;
+        } else if (doorCycle >= 6.8 && doorCycle < 7.8) {
+          const p = 1.0 - (doorCycle - 6.8) / 1.0;
+          openFactor = p * p * (3 - 2 * p);
+        }
+        leftSlidingDoor.position.x = -1.73 - openFactor * 1.18;
+        rightSlidingDoor.position.x = -0.17 + openFactor * 1.18;
+        storeWindowSpillLight.intensity = 1.42 + openFactor * 0.48;
+        wetWarmStreakMat.opacity = 0.17 + openFactor * 0.1;
+        puddleShaderMat.uniforms.uDoorOpen.value = openFactor;
+        doorSensorLedMat.color.setHex(openFactor > 0.08 ? 0xf59e0b : 0x22c55e);
+
+        // 6) Konbini Signboard & Alley Neon Subtle Flickering
+        const flickerWave = Math.sin(elapsed * 23.0) * Math.sin(elapsed * 37.0);
+        const isMicroFlicker = flickerWave > 0.84;
+        signCaseMat.emissiveIntensity = isMicroFlicker ? 0.22 : (0.35 + Math.sin(elapsed * 2.5) * 0.03);
+        alleyNeonSign.material.emissiveIntensity = (Math.sin(elapsed * 19.0) > 0.9) ? 0.25 : 0.82;
+        reflFasciaFront.material.opacity = isMicroFlicker ? 0.3 : 0.48;
+
+        // 7) Distant Traffic Signal Cycling & Synchronized Wet Road Reflection
+        const sigCycle = elapsed % 12.0;
+        if (sigCycle < 5.5) {
+          sigGreenMat.color.setHex(0x22c55e);
+          sigYellowMat.color.setHex(0x332811);
+          sigRedMat.color.setHex(0x331118);
+          trafficSignalLight.color.setHex(0x22c55e);
+          reflTrafficGlow.material.color.setHex(0x22c55e);
+          trafficWetReflectionMat.color.setHex(0x22c55e);
+          puddleShaderMat.uniforms.uSignalColor.value.setHex(0x22c55e);
+        } else if (sigCycle < 7.2) {
+          sigGreenMat.color.setHex(0x112e1c);
+          sigYellowMat.color.setHex(0xfacc15);
+          sigRedMat.color.setHex(0x331118);
+          trafficSignalLight.color.setHex(0xfacc15);
+          reflTrafficGlow.material.color.setHex(0xfacc15);
+          trafficWetReflectionMat.color.setHex(0xfacc15);
+          puddleShaderMat.uniforms.uSignalColor.value.setHex(0xfacc15);
+        } else {
+          sigGreenMat.color.setHex(0x112e1c);
+          sigYellowMat.color.setHex(0x332811);
+          sigRedMat.color.setHex(0xef4444);
+          trafficSignalLight.color.setHex(0xef4444);
+          reflTrafficGlow.material.color.setHex(0xef4444);
+          trafficWetReflectionMat.color.setHex(0xef4444);
+          puddleShaderMat.uniforms.uSignalColor.value.setHex(0xef4444);
+        }
+
+        // 8) Outdoor AC Fans Rotating, Oden Steam Rising, Chochin & Noren Sway
+        for (let i = 0; i < acFans.length; i++) {
+          acFans[i].rotation.z -= dt * (6.5 + i * 0.8);
+        }
+        chochinGroup.rotation.z = Math.sin(elapsed * 1.8) * 0.045;
+        chochinGroup.rotation.x = Math.cos(elapsed * 1.4) * 0.03;
+        norenMesh.rotation.x = Math.sin(elapsed * 2.1) * 0.05;
+
+        for (let i = 0; i < steamWisps.length; i++) {
+          const sw = steamWisps[i];
+          sw.progress = (sw.progress + dt * 0.45) % 1.0;
+          sw.mesh.position.y = 1.25 + sw.progress * 0.42;
+          sw.mesh.position.x = sw.baseX + Math.sin(elapsed * 2.5 + i) * 0.03;
+          sw.mat.opacity = Math.sin(sw.progress * Math.PI) * 0.36;
+        }
+
+        renderer.render(scene, camera);
+      }
+
+      window.addEventListener('resize', function () {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      animate();
+    })();
+  </script>
+</body>
+</html>
